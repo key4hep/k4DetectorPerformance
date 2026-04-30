@@ -47,5 +47,5 @@ function(set_test_env _testname)
 endfunction()
 
 add_subdirectory(RecoMCTruthLinkers)
-
+add_subdirectory(PFlowValidation)
 include(cmake/CreateProjectConfig.cmake)
