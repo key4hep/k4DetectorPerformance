@@ -19,28 +19,42 @@
 from Gaudi.Configuration import INFO
 from k4FWCore import IOSvc, ApplicationMgr
 from Configurables import EventDataSvc, GeoSvc, AuditorSvc, ChronoAuditor, EventCounter
+import os
+import sys
 
-# select data samples
-infolder = "/eos/user/u/ueinhaus/public/dQdx_test/singleParticles/" #  or download from "https://cernbox.cern.ch/s/orgs99sJNDmDE2t"
-filelist = "singleParticles.txt"
-#infolder = "/eos/user/u/ueinhaus/public/dQdx_test/2f-Z-had-250/" # or download from "https://cernbox.cern.ch/s/hCfz1O1qBwihKMb"
-#filelist = "2f-Z-had-250.txt"
+# for CI test: create basic sim and reco files with a few events
+det_model = "ILD_l5_o1_v02"
+det_path  = os.environ["K4GEO"]+"/ILD/compact/"+det_model+"/"+det_model+".xml"
+det_config = "/cvmfs/ilc.desy.de/sw/ILDConfig/v02-03-04/StandardConfig/production"
+cwd = os.getcwd()
 
-inputlist = []
-filelist = open(filelist, 'r')
-for line in filelist:
-  filename = line.split()[0]
-  if filename[0]=="#":
-    continue
-  infile = infolder + filename
-  inputlist.append(infile)
+os.system("ddsim --enableGun --gun.distribution uniform --gun.energy '5*GeV' --gun.particle e- --numberOfEvents 3 --outputFile ILD_sim.edm4hep.root --random.enableEventSeed --random.seed 42 --compactFile "+det_path)
+# note that ILD reco needs to be run in the ILDConfig folder
+os.system("cd "+det_config+"; k4run ILDReconstruction.py --inputFiles="+cwd+"/ILD_sim.edm4hep.root --outputFileBase="+cwd+"/ILD_reco --detectorModel="+det_model+"; cd "+cwd)
 
 io_svc = IOSvc("IOSvc")
-io_svc.Input = inputlist
+io_svc.Input = "ILD_reco_REC.edm4hep.root"
+
+# or select data samples
+if 0:
+  infolder = "/eos/user/u/ueinhaus/public/dQdx_test/singleParticles/" #  or download from "https://cernbox.cern.ch/s/orgs99sJNDmDE2t"
+  filelist = "singleParticles.txt"
+  #infolder = "/eos/user/u/ueinhaus/public/dQdx_test/2f-Z-had-250/" # or download from "https://cernbox.cern.ch/s/hCfz1O1qBwihKMb"
+  #filelist = "2f-Z-had-250.txt"
+
+  inputlist = []
+  filelist = open(filelist, 'r')
+  for line in filelist:
+    filename = line.split()[0]
+    if filename[0]=="#":
+      continue
+    infile = infolder + filename
+    inputlist.append(infile)
+
+  io_svc.Input = inputlist
 
 geo_svc = GeoSvc("GeoSvc")
-lcgeo_DIR = "/cvmfs/sw.hsf.org/key4hep/releases/2024-10-03/x86_64-almalinux9-gcc14.2.0-opt/k4geo/0.21-d5gbnd/share/k4geo"
-geo_svc.detectors = [lcgeo_DIR+"/ILD/compact/ILD_l5_o1_v02/ILD_l5_o1_v02.xml"]
+geo_svc.detectors = [det_path]
 geo_svc.EnableGeant4Geo = False
 geo_svc.OutputLevel = INFO
 
@@ -55,17 +69,17 @@ mydQdxAnalyser = dQdxAnalyser("dQdxAnalyser",
     InputTrackCollection = ["MarlinTrkTracks"],
     InputRecoParticleCollection = ["PandoraPFOs"],
     usePFOTracks = True,
-    plotStuff = True,
-    plotFolder = "Plots",
+    plotStuff = False,
+    outputFile = "dQdxAnalyser_output.root",
     OutputLevel = INFO
 )
 
 myCounter = EventCounter("Counter",
-    Frequency = 10000
+    Frequency = 1
 )
 
 app_mgr = ApplicationMgr(
-    TopAlg = [myCounter, mydEdxAnalyser],
+    TopAlg = [myCounter, mydQdxAnalyser],
     EvtSel = 'NONE',
     EvtMax = -1,
     ExtSvc = [geo_svc, EventDataSvc("EventDataSvc"), audsvc],

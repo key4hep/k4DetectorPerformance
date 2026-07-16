@@ -957,6 +957,8 @@ StatusCode dQdxAnalyser::finalize()
     m_HEHist[i]->Write();
   }
 
+  m_outFile->Close();
+
   // plot stuff
   if (m_plotStuff)
   {

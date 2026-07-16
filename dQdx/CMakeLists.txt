@@ -35,3 +35,7 @@ install(TARGETS ${PackageName}
 set_target_properties(${PackageName} PROPERTIES
   PUBLIC_HEADER "${headers}"
 )
+
+SET(test_name "test_rundQdxAnalyser")
+ADD_TEST(NAME ${test_name} COMMAND k4run test/rundQdxAnalyser.py)
+set_test_env(${test_name})
