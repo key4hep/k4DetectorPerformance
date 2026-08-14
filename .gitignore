@@ -247,3 +247,6 @@ test/k4FWCoreTest/**/*.root
 test/inputFiles/*.slcio
 test/gaudi_opts/testConverterConstants.py
 
+# TrackingValidation test outputs
+TrackingPerformance/test/*.root
+TrackingPerformance/test/*.log

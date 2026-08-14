@@ -51,5 +51,6 @@ endfunction()
 
 add_subdirectory(RecoMCTruthLinkers)
 add_subdirectory(dQdx)
+add_subdirectory(TrackingPerformance)
 
 include(cmake/CreateProjectConfig.cmake)
