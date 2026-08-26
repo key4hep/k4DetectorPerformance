@@ -17,11 +17,11 @@
  * limitations under the License.
  */
 
-#include <filesystem>
 #include <GaudiKernel/MsgStream.h>
 #include <dQdxAnalyser.h>
 #include <edm4hep/TrackerHit.h>
 #include <edm4hep/utils/TrackUtils.h>
+#include <filesystem>
 #include <marlinutil/HelixClass.h>
 #include <podio/LinkNavigator.h>
 
