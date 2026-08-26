@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2026 Key4hep-Project.
+ * Copyright (c) 2020-2024 Key4hep-Project.
  *
  * This file is part of Key4hep.
  * See https://key4hep.github.io/key4hep-doc/ for further info.
@@ -169,6 +169,7 @@ struct dQdxAnalyser final : k4FWCore::Consumer<void(const edm4hep::RecDqdxCollec
 
   // ====== helper functions =====
 
+  virtual std::tuple<float, float> getMomFromTrackState(edm4hep::TrackState state) const;
   virtual double Calculate_pValueSP(std::vector<double> v1, std::vector<double> v2);
   virtual void FitAndGetResolution(TH2* hist, TF1* fitFunction, TObjArray* fitResult, TH1* resolution);
   virtual void PlotTH1(TCanvas* can, TH1* hist);
@@ -191,22 +192,22 @@ struct dQdxAnalyser final : k4FWCore::Consumer<void(const edm4hep::RecDqdxCollec
     "typically: [.ps, .eps, .pdf, .svg, .tex, .gif, .xpm, .png, .jpg, .tiff, .cxx, .xml, .json, .root]. Default: .png"};
 
   // geometry
-  Gaudi::Property<int> m_subdetID{this, "subdetID", 4, "Subdetector ID of the gaseous tracker (TPC/DC/etc.); typically 4 for TPC, 3 for DC; default: 4"};
+  Gaudi::Property<int> m_subdetID{this, "subdetID", 4, "Subdetector ID of the gaseous tracker (TPC/DC/etc.); typically 4 for TPC, 3 for DC. Default: 4"};
 
   // binning
-  Gaudi::Property<int> m_usedENdx {this, "usedENdx", 1, "Select if you analyse dE/dx (1) or dN/dx (2). Default: 1."};
+  Gaudi::Property<int> m_usedENdx {this, "usedENdx",    1, "Select if you analyse dE/dx (1) or dN/dx (2). Default: 1."};
   Gaudi::Property<int> m_nBinsMom {this, "nBinsMom",  100, "Number of bins of the momentum axis in histograms. Default: 100"};
   Gaudi::Property<int> m_nBinsdQdx{this, "nBinsdQdx", 300, "Number of bins of the dQ/dx axis in histograms. Default: 300"};
   Gaudi::Property<int> m_nBinsLam {this, "nBinsLam",   18, "Number of bins of the lambda angle axis in histograms. Default: 18"};
   Gaudi::Property<int> m_nBinsHits{this, "nBinsHits", 110, "Number of bins of the numer-of-hits axis in histograms. Default: 110"};
-  Gaudi::Property<float> m_minBinMom{this, "minBinMom", -1.f, "log_10(momentum/GeV) of the lower end of the momentum axis in histograms. Default: -1 (= 0.1 GeV)."};
-  Gaudi::Property<float> m_maxBinMom{this, "maxBinMom",  2.f, "log_10(momentum/GeV) of the upper end of the momentum axis in histograms. Default:  2 (= 100 GeV)."};
+  Gaudi::Property<float> m_minBinMom {this, "minBinMom",  -1.f, "log_10(momentum/GeV) of the lower end of the momentum axis in histograms. Default: -1 (= 0.1 GeV)."};
+  Gaudi::Property<float> m_maxBinMom {this, "maxBinMom",   2.f, "log_10(momentum/GeV) of the upper end of the momentum axis in histograms. Default:  2 (= 100 GeV)."};
   Gaudi::Property<float> m_minBindQdx{this, "minBindQdx",  0.f, "Lower end of the dQ/dx axis in GeV/mm or 1/mm in histograms. Default:    0."};
   Gaudi::Property<float> m_maxBindQdx{this, "maxBindQdx",1e-6f, "Upper end of the dQ/dx axis in GeV/mm or 1/mm in histograms. Default: 1e-6."};
-  Gaudi::Property<float> m_minBinLam {this, "minBinLam",  0.f, "Lower end of the lambda angle axis in degree in histograms. Default:  0."};
-  Gaudi::Property<float> m_maxBinLam {this, "maxBinLam", 90.f, "Upper end of the lambda angle axis in degree in histograms. Default: 90."};
-  Gaudi::Property<int>   m_minBinHits{this, "minBinHits",   0, "Lower end of the number-of-hits axis in histograms. Default:   0."};
-  Gaudi::Property<int>   m_maxBinHits{this, "maxBinHits", 220, "Upper end of the number-of-hits axis in histograms. Default: 220."};
+  Gaudi::Property<float> m_minBinLam {this, "minBinLam",   0.f, "Lower end of the lambda angle axis in degree in histograms. Default:  0."};
+  Gaudi::Property<float> m_maxBinLam {this, "maxBinLam",  90.f, "Upper end of the lambda angle axis in degree in histograms. Default: 90."};
+  Gaudi::Property<int>   m_minBinHits{this, "minBinHits",    0, "Lower end of the number-of-hits axis in histograms. Default:   0."};
+  Gaudi::Property<int>   m_maxBinHits{this, "maxBinHits",  220, "Upper end of the number-of-hits axis in histograms. Default: 220."};
 
   // track selection
   Gaudi::Property<bool> m_usePFOTracks{this, "usePFOTracks", false, "Set true if tracks from (charged) PFOs should be used as data basis instead of all tracks from the TrackCollection."};
@@ -243,31 +244,31 @@ struct dQdxAnalyser final : k4FWCore::Consumer<void(const edm4hep::RecDqdxCollec
   static const int m_nPart = 5;
 
   // PDG numbers, masses and histogram labels of particles, including "other" (PDG 10) and "all"
-  std::array<int, m_nPart + 1> m_PDG = {11, 13, 211, 321, 2212, 10};
-  std::array<double, m_nPart> m_Masses {0.000511, 0.10566, 0.13957, 0.49368, 0.93827};
-  std::vector<std::string> m_Particles = {"Electrons","Muons","Pions","Kaons","Protons","Other","All"}; // for histogram names
-  std::vector<std::string> m_particles = {"electrons","muons","pions","kaons","protons","all other particles","all particles"}; // for histogram descriptions
-  std::vector<std::string> m_SP_part   = {"e","mu","pi","ka","p"}; // for separation power histogram names
+  std::array<int, m_nPart + 1> m_PDG   = {11, 13, 211, 321, 2212, 10};
+  std::array<double, m_nPart> m_Masses = {0.000511, 0.10566, 0.13957, 0.49368, 0.93827};
+  std::vector<std::string> m_Particles = {"Electrons", "Muons", "Pions", "Kaons", "Protons", "Other", "All"}; // for histogram names
+  std::vector<std::string> m_particles = {"electrons", "muons", "pions", "kaons", "protons", "all other particles", "all particles"}; // for histogram descriptions
+  std::vector<std::string> m_SP_part   = {"e", "mu", "pi", "ka", "p"}; // for separation power histogram names
 
   // vector array of all momentum, dQ/dx, dQ/dx error, tan lambda, number of hits and transverse momentum values for each track
-  mutable std::vector< std::array<double, 6> > m_dQdxVec[m_nPart];
+  mutable std::vector<std::array<double, 6>> m_dQdxVec[m_nPart];
 
   // root file, histograms and fit results
   TFile* m_outFile{};
 
   // Bethe-Bloch histograms (including one for "other particles" and one for "all particles")
-  TH2* m_BBHist[m_nPart+2];
+  TH2* m_BBHist[m_nPart + 2];
 
   // Gaussian fit results: each TObjArray has 4 histograms (amplitude, mean, sigma and chi2)
   TObjArray* m_FitHist[m_nPart];
   TObjArray* m_FitLambda[m_nPart];
-  TObjArray* m_FitNHit[m_nPart+1];
-  TObjArray* m_FitLambdaFull[m_nPart+1];
-  TObjArray* m_FitCosThFull[m_nPart+1];
+  TObjArray* m_FitNHit[m_nPart + 1];
+  TObjArray* m_FitLambdaFull[m_nPart + 1];
+  TObjArray* m_FitCosThFull[m_nPart + 1];
 
   // storage for names of histograms to have a handle on fit results that are 'free floating' in memory, since TH3::FitSlicesZ has no direct transfer
-  std::vector< std::string > m_NormBothHistNames[m_nPart];
-  std::vector< std::string > m_NormBothHistNames_1GeV[m_nPart];
+  std::vector<std::string> m_NormBothHistNames[m_nPart];
+  std::vector<std::string> m_NormBothHistNames_1GeV[m_nPart];
 
   // dQ/dx resolution over momentum histograms
   TH1* m_FitHist_Res[m_nPart];         // resolution from fit results
@@ -278,23 +279,24 @@ struct dQdxAnalyser final : k4FWCore::Consumer<void(const edm4hep::RecDqdxCollec
   TH1* m_ResNorm_FiducialElectrons{};  // resolution for all fiducial electrons with normalisation
 
   // resolution dependence on different parameters, fit histograms
-  TH2* m_NormLambdaHist[m_nPart];       // relative dQdx vs. lambda of track, for tracks with p>1GeV, nHits>=200
-  TH1* m_FitLambda_Res[m_nPart];        // resolution vs. lambda from fit results
-  TH2* m_NormNHitHist[m_nPart+1];       // normalised dQdx vs. number of hits of track, for tracks with |lambda|<20deg
-  TH1* m_FitNHit_Res[m_nPart+1];        // resolution vs. number of hits from fit results
-  TH3* m_NormBothHist[m_nPart];         // relative dQdx vs. lambda of track and vs. number of hits
-  TH2* m_FitBoth_Res[m_nPart];          // resolution vs. lambda and vs. number of hits from fit results
-  TH3* m_NormBothHist_1GeV[m_nPart];    // relative dQdx vs. lambda of track and vs. number of hits, for tracks with p>1GeV
-  TH2* m_FitBoth_Res_1GeV[m_nPart];     // resolution vs. lambda and vs. number of hits from fit results, tracks with p>1GeV
-  TH2* m_NormLambdaFullHist[m_nPart+1]; // relative dQdx vs. lambda of track, for tracks with p>1GeV
-  TH1* m_FitLambdaFull_Res[m_nPart+1];  // resolution vs. lambda from fit results
-  TH2* m_NormCosThFullHist[m_nPart+1];  // relative dQdx vs. lambda of track, for tracks with p>1GeV
-  TH1* m_FitCosThFull_Res[m_nPart+1];   // resolution vs. lambda from fit results
+  TH2* m_NormLambdaHist[m_nPart];         // relative dQdx vs. lambda of track, for tracks with p>1GeV, nHits>=200
+  TH1* m_FitLambda_Res[m_nPart];          // resolution vs. lambda from fit results
+  TH2* m_NormNHitHist[m_nPart + 1];       // normalised dQdx vs. number of hits of track, for tracks with |lambda|<20deg
+  TH1* m_FitNHit_Res[m_nPart + 1];        // resolution vs. number of hits from fit results
+  TH3* m_NormBothHist[m_nPart];           // relative dQdx vs. lambda of track and vs. number of hits
+  TH2* m_FitBoth_Res[m_nPart];            // resolution vs. lambda and vs. number of hits from fit results
+  TH3* m_NormBothHist_1GeV[m_nPart];      // relative dQdx vs. lambda of track and vs. number of hits, for tracks with p>1GeV
+  TH2* m_FitBoth_Res_1GeV[m_nPart];       // resolution vs. lambda and vs. number of hits from fit results, tracks with p>1GeV
+  TH2* m_NormLambdaFullHist[m_nPart + 1]; // relative dQdx vs. lambda of track, for tracks with p>1GeV
+  TH1* m_FitLambdaFull_Res[m_nPart + 1];  // resolution vs. lambda from fit results
+  TH2* m_NormCosThFullHist[m_nPart + 1];  // relative dQdx vs. lambda of track, for tracks with p>1GeV
+  TH1* m_FitCosThFull_Res[m_nPart + 1];   // resolution vs. lambda from fit results
 
   // separation power between all particle combinations
-  TH1* m_SPHist[m_nPart*(m_nPart-1)/2];
-  TH1* m_SPHist_pValue[m_nPart*(m_nPart-1)/2];
-  TH1* m_SPHist_pValue_angcorr[m_nPart*(m_nPart-1)/2];
+  static const int n_SP = m_nPart * (m_nPart - 1) / 2;
+  TH1* m_SPHist[n_SP];
+  TH1* m_SPHist_pValue[n_SP];
+  TH1* m_SPHist_pValue_angcorr[n_SP];
 
   // MC particle multiplicity according to track2mctruth link
   TH1* m_MCmult{};
@@ -313,15 +315,14 @@ struct dQdxAnalyser final : k4FWCore::Consumer<void(const edm4hep::RecDqdxCollec
   TH2* m_dQdxErrorCorrelation{};
 
   // hit charge spectrum
-  TH1* m_HitEnergySpectrum[m_nPart+2];
-  TH1* m_HitNumberSpectrum[m_nPart+2];
-  TH1* m_HitEnergySpectrum_at1[m_nPart+2];
-  TH1* m_HitEnergySpectrum_at25[m_nPart+2];
-  TH2* m_HEHist[m_nPart+2];
+  TH1* m_HitEnergySpectrum[m_nPart + 2];
+  TH1* m_HitNumberSpectrum[m_nPart + 2];
+  TH1* m_HitEnergySpectrum_at1[m_nPart + 2];
+  TH1* m_HitEnergySpectrum_at25[m_nPart + 2];
+  TH2* m_HEHist[m_nPart + 2];
 
   // Landau fit results: each TObjArray has 4 histograms (amplitude, MPV, sigma and chi2)
   TObjArray* m_HEFitHist[m_nPart];
-
 };
 
 DECLARE_COMPONENT(dQdxAnalyser)

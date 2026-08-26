@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2020-2026 Key4hep-Project.
+# Copyright (c) 2020-2024 Key4hep-Project.
 #
 # This file is part of Key4hep.
 # See https://key4hep.github.io/key4hep-doc/ for further info.
@@ -16,6 +16,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
+
 from Gaudi.Configuration import INFO
 from k4FWCore import IOSvc, ApplicationMgr
 from Configurables import EventDataSvc, GeoSvc, AuditorSvc, ChronoAuditor, EventCounter
