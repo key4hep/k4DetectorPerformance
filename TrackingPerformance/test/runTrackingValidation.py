@@ -469,7 +469,7 @@ TopAlg = []
 # =============================================================================
 
 if args.runDigi:
-    from Configurables import DDPlanarDigi, DCHdigi_v02
+    from Configurables import DDPlanarDigi, WireTrackerDigi_v01
 
     innerVertexResolution_x = 0.003
     innerVertexResolution_y = 0.003
@@ -565,7 +565,7 @@ if args.runDigi:
     ]
 
     if args.useDCH:
-        dch_digitizer = DCHdigi_v02(
+        dch_digitizer = WireTrackerDigi_v01(
             "DCHdigi2",
             InputSimHitCollection=["DCHCollection"],
             OutputDigihitCollection=["DCH_DigiCollection"],
