@@ -16,6 +16,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
+
 # Validate a vertex collection against the Monte Carlo truth primary vertex.
 #
 # Works on any EDM4hep file holding MCParticles and an edm4hep::Vertex
