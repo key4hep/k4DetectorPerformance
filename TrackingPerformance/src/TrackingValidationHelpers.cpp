@@ -66,7 +66,8 @@ HelixParams truthPerigeeFromMC(const edm4hep::MCParticle& mc, double Bz, double 
   hp.Z0 = pca.pcaZ - refZ;
   hp.phi = pca.phi0;
   hp.tanLambda = p.z / hp.pT;
-  hp.omega = momentumScale * Bz * mc.getCharge() / hp.pT;
+  // Signed by the charge only, as the fitted state (and ptFromState) use |Bz|.
+  hp.omega = momentumScale * std::abs(Bz) * mc.getCharge() / hp.pT;
   return hp;
 }
 
