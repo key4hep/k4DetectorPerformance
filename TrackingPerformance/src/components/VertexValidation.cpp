@@ -118,10 +118,10 @@ struct VertexValidation final
     return StatusCode::SUCCESS;
   }
 
-  void operator()(const edm4hep::MCParticleCollection& mcParts, const edm4hep::VertexCollection& vertices,
-                  const edm4hep::TrackMCParticleLinkCollection& trackMCLinks,
-                  const std::vector<const edm4hep::VertexRecoParticleLinkCollection*>& vertexParticleLinks)
-      const override {
+  void
+  operator()(const edm4hep::MCParticleCollection& mcParts, const edm4hep::VertexCollection& vertices,
+             const edm4hep::TrackMCParticleLinkCollection& trackMCLinks,
+             const std::vector<const edm4hep::VertexRecoParticleLinkCollection*>& vertexParticleLinks) const override {
     m_tree.clear();
     m_tree.event = m_evt++;
 
@@ -222,6 +222,7 @@ struct VertexValidation final
       double totalWeight = 0.;
       double sumPt2 = 0.;
       int nTracks = 0;
+      int nTruthLinkedTracks = 0;
       std::map<int, double> weightPerTruthVertex;
       for (const auto& particle : vtx.getParticles()) {
         float weight = 1.f;
@@ -241,6 +242,7 @@ struct VertexValidation final
           const auto it = trackTruth.find(key(track));
           if (it != trackTruth.end()) {
             weightPerTruthVertex[truthVertexIndex(it->second.second->getVertex())] += weight;
+            ++nTruthLinkedTracks;
             break; // one truth particle per reconstructed particle
           }
         }
@@ -290,6 +292,7 @@ struct VertexValidation final
       m_tree.ndf.push_back(static_cast<float>(vtx.getNdf()));
       m_tree.chi2ndf.push_back(vtx.getNdf() > 0 ? vtx.getChi2() / vtx.getNdf() : -1.f);
       m_tree.nTracks.push_back(static_cast<float>(nTracks));
+      m_tree.nTruthLinkedTracks.push_back(static_cast<float>(nTruthLinkedTracks));
       m_tree.totalTrackWeight.push_back(static_cast<float>(totalWeight));
       m_tree.sumPt2.push_back(static_cast<float>(sumPt2));
       m_tree.matchFraction.push_back(static_cast<float>(matchFraction));
@@ -335,8 +338,9 @@ struct VertexValidation final
       if (m_tree.covPosDef[pvIndex] == 0.f) {
         ++m_nPVBadCovariance;
       }
+      // Both counts are of truth-linked tracks, so the fraction is at most one
       if (m_tree.nTracksEvent > 0) {
-        m_tree.pvTrackFraction.push_back(m_tree.nTracks[pvIndex] / static_cast<float>(m_tree.nTracksEvent));
+        m_tree.pvTrackFraction.push_back(m_tree.nTruthLinkedTracks[pvIndex] / static_cast<float>(m_tree.nTracksEvent));
       }
       m_pvResiduals[0].push_back(m_tree.resX[pvIndex]);
       m_pvResiduals[1].push_back(m_tree.resY[pvIndex]);
@@ -417,7 +421,7 @@ struct VertexValidation final
             (std::string("(") + axis + "_{reco} - " + axis + "_{true}) / #sigma_{" + axis + "}").c_str());
       }
       TCanvas* c = TrackingValidationPlots::drawPullCanvas(h, ("c_pv_pull_" + std::string(axis)).c_str(),
-                                                          (std::string("PV pull ") + axis).c_str());
+                                                           (std::string("PV pull ") + axis).c_str());
       if (h) {
         info() << "PV pull " << axis << ": mean = " << h->GetMean() << ", RMS = " << h->GetRMS() << endmsg;
         // Core width from the Gaussian fit drawPullCanvas makes (it fits only
@@ -434,10 +438,11 @@ struct VertexValidation final
 
     // ---------- fit quality, multiplicity and truth matching ----------
     writeHistogram("pvChi2Ndf", "h_pv_chi2ndf", "PV fit quality", "#chi^{2}/ndf", 100, 0.0, 10.0);
-    writeHistogram("pvNTracks", "h_pv_ntracks", "Tracks used by the PV", "N_{tracks} (weight #geq threshold)", 31,
-                   -0.5, 30.5);
-    writeHistogram("pvTrackFraction", "h_pv_track_fraction", "Fraction of the event's tracks used by the PV",
-                   "N_{tracks, PV} / N_{tracks, event}", 44, 0.0, 1.1);
+    writeHistogram("pvNTracks", "h_pv_ntracks", "Tracks used by the PV", "N_{tracks} (weight #geq threshold)", 31, -0.5,
+                   30.5);
+    writeHistogram("pvTrackFraction", "h_pv_track_fraction",
+                   "Fraction of the event's truth-linked tracks used by the PV",
+                   "N_{truth-linked tracks, PV} / N_{truth-linked tracks, event}", 44, 0.0, 1.1);
     writeHistogram("matchFraction", "h_match_fraction", "Truth match fraction of reconstructed vertices",
                    "matched track weight / total track weight", 44, 0.0, 1.1);
     if (TH1F* h = writeHistogram("classification", "h_vertex_classification",
@@ -449,8 +454,7 @@ struct VertexValidation final
       h->Write("", TObject::kOverwrite);
     }
 
-    auto* hNVtx =
-        new TH1F("h_n_reco_vertices", "Reconstructed vertices per event;N_{vertices};Events", 11, -0.5, 10.5);
+    auto* hNVtx = new TH1F("h_n_reco_vertices", "Reconstructed vertices per event;N_{vertices};Events", 11, -0.5, 10.5);
     m_tree.tree->Project("h_n_reco_vertices", "nRecoVtx");
     hNVtx->Write();
 
@@ -501,8 +505,8 @@ private:
     int event = 0;
     int nRecoVtx = 0;
     int nTrueVtx = 0;
-    int nTracksEvent = 0;      // tracks with a truth link in the event
-    int truthPVFoundClean = 0; // truth PV matched by a clean reco vertex
+    int nTracksEvent = 0;                           // tracks with a truth link in the event
+    int truthPVFoundClean = 0;                      // truth PV matched by a clean reco vertex
     float truthX = 0.f, truthY = 0.f, truthZ = 0.f; // [mm]
 
     // one entry per reconstructed vertex
@@ -511,30 +515,62 @@ private:
     std::vector<float> resX, resY, resZ;       // reco - truth PV [um]
     std::vector<float> pullX, pullY, pullZ;    // residual / sigma
     std::vector<float> chi2, ndf, chi2ndf;
-    std::vector<float> nTracks;          // tracks with weight >= MinTrackWeight
-    std::vector<float> totalTrackWeight; // their summed weight
-    std::vector<float> sumPt2;           // their sum pT^2 [GeV^2]
-    std::vector<float> matchFraction;    // majority truth-vertex weight / total weight
-    std::vector<float> matchedTruthIndex; // 0 = truth PV, >0 secondary truth vertex, -1 none
-    std::vector<float> classification;   // see Classification
-    std::vector<float> isPrimary;        // 1 if flagged as primary by the producer
-    std::vector<float> covPosDef;        // 1 if the position covariance is positive definite
+    std::vector<float> nTracks;            // tracks with weight >= MinTrackWeight
+    std::vector<float> nTruthLinkedTracks; // those of them with a truth link
+    std::vector<float> totalTrackWeight;   // their summed weight
+    std::vector<float> sumPt2;             // their sum pT^2 [GeV^2]
+    std::vector<float> matchFraction;      // majority truth-vertex weight / total weight
+    std::vector<float> matchedTruthIndex;  // 0 = truth PV, >0 secondary truth vertex, -1 none
+    std::vector<float> classification;     // see Classification
+    std::vector<float> isPrimary;          // 1 if flagged as primary by the producer
+    std::vector<float> covPosDef;          // 1 if the position covariance is positive definite
 
     // zero or one entry: the reconstructed primary vertex
-    std::vector<float> pvResX, pvResY, pvResZ;       // [um]
+    std::vector<float> pvResX, pvResY, pvResZ; // [um]
     std::vector<float> pvPullX, pvPullY, pvPullZ;
     std::vector<float> pvSigmaX, pvSigmaY, pvSigmaZ; // [um]
     std::vector<float> pvChi2Ndf;
     std::vector<float> pvNTracks;
-    std::vector<float> pvTrackFraction;
+    std::vector<float> pvTrackFraction; // truth-linked tracks of the PV / nTracksEvent
 
     void clear() {
       nRecoVtx = nTrueVtx = nTracksEvent = truthPVFoundClean = 0;
       truthX = truthY = truthZ = 0.f;
-      for (auto* v : {&recoX, &recoY, &recoZ, &sigmaX, &sigmaY, &sigmaZ, &resX, &resY, &resZ, &pullX, &pullY, &pullZ,
-                      &chi2, &ndf, &chi2ndf, &nTracks, &totalTrackWeight, &sumPt2, &matchFraction,
-                      &matchedTruthIndex, &classification, &isPrimary, &covPosDef, &pvResX, &pvResY, &pvResZ,
-                      &pvPullX, &pvPullY, &pvPullZ, &pvSigmaX, &pvSigmaY, &pvSigmaZ, &pvChi2Ndf, &pvNTracks,
+      for (auto* v : {&recoX,
+                      &recoY,
+                      &recoZ,
+                      &sigmaX,
+                      &sigmaY,
+                      &sigmaZ,
+                      &resX,
+                      &resY,
+                      &resZ,
+                      &pullX,
+                      &pullY,
+                      &pullZ,
+                      &chi2,
+                      &ndf,
+                      &chi2ndf,
+                      &nTracks,
+                      &nTruthLinkedTracks,
+                      &totalTrackWeight,
+                      &sumPt2,
+                      &matchFraction,
+                      &matchedTruthIndex,
+                      &classification,
+                      &isPrimary,
+                      &covPosDef,
+                      &pvResX,
+                      &pvResY,
+                      &pvResZ,
+                      &pvPullX,
+                      &pvPullY,
+                      &pvPullZ,
+                      &pvSigmaX,
+                      &pvSigmaY,
+                      &pvSigmaZ,
+                      &pvChi2Ndf,
+                      &pvNTracks,
                       &pvTrackFraction}) {
         v->clear();
       }
@@ -568,6 +604,7 @@ private:
     t.tree->Branch("ndf", &t.ndf);
     t.tree->Branch("chi2ndf", &t.chi2ndf);
     t.tree->Branch("nTracks", &t.nTracks);
+    t.tree->Branch("nTruthLinkedTracks", &t.nTruthLinkedTracks);
     t.tree->Branch("totalTrackWeight", &t.totalTrackWeight);
     t.tree->Branch("sumPt2", &t.sumPt2);
     t.tree->Branch("matchFraction", &t.matchFraction);
@@ -626,8 +663,7 @@ private:
   // ---------- properties ----------
   Gaudi::Property<std::string> m_outputFile{this, "OutputFile", "vertex_validation.root",
                                             "Output ROOT file (tree and plots)"};
-  Gaudi::Property<float> m_residualRange{this, "ResidualRange", 10.f,
-                                         "Half-range of the PV residual histograms [um]"};
+  Gaudi::Property<float> m_residualRange{this, "ResidualRange", 10.f, "Half-range of the PV residual histograms [um]"};
   Gaudi::Property<double> m_samePositionTolerance{
       this, "TruthVertexTolerance", 1e-6,
       "MC production points closer than this are taken to be the same truth vertex [mm]"};
