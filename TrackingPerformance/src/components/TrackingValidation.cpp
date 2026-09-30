@@ -37,6 +37,7 @@
 // ROOT
 #include "TCanvas.h"
 #include "TFile.h"
+#include "TGraphAsymmErrors.h"
 #include "TGraphErrors.h"
 #include "TTree.h"
 
@@ -160,8 +161,16 @@ struct TrackingValidation final
     std::unordered_map<int, std::vector<podio::ObjectID>> hitsPerParticle;
     hitsPerParticle.reserve(mcParts.size());
 
-    std::unordered_map<podio::ObjectID, int> hitToParticle;
+    std::unordered_map<podio::ObjectID, std::vector<int>> hitToParticle;
     hitToParticle.reserve(200000);
+
+    // ObjectID indices need not be positions in a selected/subset MC collection.
+    // Assign distinct local IDs to outside contributors too, so they cannot
+    // alias selected particles or turn a selected minority into the majority.
+    std::unordered_map<podio::ObjectID, int> particleIndices;
+    int nextParticle = 0;
+    for (const auto& mc : mcParts)
+      particleIndices.emplace(mc.getObjectID(), nextParticle++);
 
     // digi-to-sim links
     for (const auto* links : linkCollections) {
@@ -170,14 +179,23 @@ struct TrackingValidation final
       for (const auto& link : *links) {
         const auto digi = link.getFrom();
         const auto sim = link.getTo();
+        if (!digi.isAvailable() || !sim.isAvailable())
+          continue;
         const auto mc = sim.getParticle();
-        if (!digi.isAvailable() || !mc.isAvailable())
+        if (!mc.isAvailable())
           continue;
 
-        const int pid = mc.getObjectID().index;
+        const auto [particle, inserted] = particleIndices.emplace(mc.getObjectID(), nextParticle);
+        if (inserted)
+          ++nextParticle;
+        const int pid = particle->second;
         const auto key = digi.getObjectID();
-        hitsPerParticle[pid].push_back(key);
-        hitToParticle[key] = pid;
+        auto& contributors = hitToParticle[key];
+        // Preserve every contributor, counting each particle once per reco hit.
+        if (std::find(contributors.begin(), contributors.end(), pid) == contributors.end()) {
+          contributors.push_back(pid);
+          hitsPerParticle[pid].push_back(key);
+        }
       }
     }
 
@@ -223,7 +241,7 @@ struct TrackingValidation final
           if (!st)
             continue;
 
-          const int pid = majorityParticleForTrack(trk, hitToParticle);
+          const int pid = majorityParticleForTrack(trk, hitToParticle, hitsPerParticle);
           if (pid < 0 || pid >= (int)mcParts.size())
             continue;
 
@@ -238,7 +256,7 @@ struct TrackingValidation final
 
     // ---------- Fitter trees ----------
     if ((mode == 0 || mode == 2) && fittedTracks) {
-      fillFitterTrees(event, mcParts, *fittedTracks, hitToParticle, perfectAtIPByPid, doPerfect);
+      fillFitterTrees(event, mcParts, *fittedTracks, hitToParticle, hitsPerParticle, perfectAtIPByPid, doPerfect);
     }
   }
 
@@ -364,7 +382,7 @@ struct TrackingValidation final
       }
 
       // finder summary plot
-      TGraphErrors* g_eff_vs_p = TrackingValidationPlots::makeEfficiencyVsMomentum(
+      TGraphAsymmErrors* g_eff_vs_p = TrackingValidationPlots::makeEfficiencyVsMomentum(
           m_finder_p2t.tree, "g_efficiency_vs_p", m_finderEfficiencyDefinition.value(), m_finderPurityThreshold.value(),
           0.1, 100.0, 0.15);
       if (g_eff_vs_p) {
@@ -396,17 +414,18 @@ private:
   Gaudi::Property<float> m_refZ{this, "RefPointZ", 0.f,
                                 "Reference point Z [mm] (must match fitter m_VP_referencePoint)"};
 
-  // Definition used for the summary tracking-efficiency plot.
-  // Default = 1 keeps the current behaviour unchanged.
-  Gaudi::Property<int> m_finderEfficiencyDefinition{this, "FinderEfficiencyDefinition", 1,
-                                                    "Definition used for the tracking-efficiency summary plot: "
-                                                    "1 = require purity >= FinderPurityThreshold; "
-                                                    "2 = require purity >= 0.5 and efficiency >= 0.5"};
+  // Track-particle matching criterion. It defines the tracking efficiency and
+  // also selects which fitted (and perfect-fitted) tracks enter the fitter trees.
+  Gaudi::Property<int> m_finderEfficiencyDefinition{
+      this, "FinderEfficiencyDefinition", 1,
+      "Track-particle matching used for the tracking efficiency and for the fitter trees: "
+      "1 = require purity >= FinderPurityThreshold; "
+      "2 = require purity >= 0.5 and efficiency >= 0.5 (ACTS doubleMatching)"};
 
   Gaudi::Property<float> m_finderPurityThreshold{
       this, "FinderPurityThreshold", 0.75f,
-      "Minimum purity for a particle-track match to count in tracking efficiency "
-      "when FinderEfficiencyDefinition = 1"};
+      "Minimum purity for a track to be matched to its majority particle "
+      "when FinderEfficiencyDefinition = 1 (tracking efficiency and fitter trees)"};
 
   Gaudi::Property<bool> m_doPerfectFit{this, "DoPerfectFit", false,
                                        "If true: fill fitter_vs_perfect using PerfectFitted_tracks if available. "
@@ -469,6 +488,8 @@ private:
     std::vector<float> errD0, errZ0, errPhi, errOmega, errTanL;
     std::vector<float> p_reco, p_ref;
     std::vector<float> pT_reco, pT_ref;
+    std::vector<float> vertexR; // production vertex radius of the matched MC particle [mm]
+    std::vector<float> vertexZ; // production vertex z of the matched MC particle [mm]
 
     void clear() {
       track_index.clear();
@@ -492,6 +513,8 @@ private:
       p_ref.clear();
       pT_reco.clear();
       pT_ref.clear();
+      vertexR.clear();
+      vertexZ.clear();
     }
   };
 
@@ -537,6 +560,8 @@ private:
     t.tree->Branch("p_ref", &t.p_ref);
     t.tree->Branch("pT_reco", &t.pT_reco);
     t.tree->Branch("pT_ref", &t.pT_ref);
+    t.tree->Branch("vertexR", &t.vertexR);
+    t.tree->Branch("vertexZ", &t.vertexZ);
   }
 
   // ---------- association trees ----------
@@ -609,7 +634,7 @@ private:
 
   void fillFinderAssoc(int event, const edm4hep::MCParticleCollection& mcParts,
                        const edm4hep::TrackCollection& finderTracks,
-                       const std::unordered_map<podio::ObjectID, int>& hitToParticle,
+                       const std::unordered_map<podio::ObjectID, std::vector<int>>& hitToParticle,
                        const std::unordered_map<int, std::vector<podio::ObjectID>>& hitsPerParticle) const {
 
     m_finder_p2t.clear();
@@ -630,7 +655,8 @@ private:
         auto it = hitToParticle.find(hk);
         if (it == hitToParticle.end())
           continue;
-        trackParticleCounts[tIdx][it->second] += 1;
+        for (int pid : it->second)
+          trackParticleCounts[tIdx][pid] += 1;
       }
       ++tIdx;
     }
@@ -664,7 +690,8 @@ private:
         const float eff = (nParticleHits > 0) ? float(shared) / float(nParticleHits) : 0.f;
         const float pur = (nTrackHits > 0) ? float(shared) / float(nTrackHits) : 0.f;
 
-        parts.push_back(pid);
+        // -1: contributor not in the selected MC collection, so it has no index
+        parts.push_back(pid < (int)mcParts.size() ? pid : -1);
         sh.push_back(shared);
         effs.push_back(eff);
         purs.push_back(pur);
@@ -674,6 +701,17 @@ private:
       m_finder_t2p.sharedHits.push_back(sh);
       m_finder_t2p.matchEfficiency.push_back(effs);
       m_finder_t2p.matchPurity.push_back(purs);
+    }
+
+    std::vector<int> majority(finderTracks.size(), -1);
+    for (int t = 0; t < (int)finderTracks.size(); ++t) {
+      int bestCount = 0;
+      for (const auto& [pid, count] : trackParticleCounts[t]) {
+        if (count > bestCount || (count == bestCount && pid < majority[t])) {
+          majority[t] = pid;
+          bestCount = count;
+        }
+      }
     }
 
     // particle -> tracks
@@ -707,6 +745,8 @@ private:
       std::vector<float> purs;
 
       for (int t = 0; t < (int)finderTracks.size(); ++t) {
+        if (majority[t] != p)
+          continue;
         auto it = trackParticleCounts[t].find(p);
         if (it == trackParticleCounts[t].end())
           continue;
@@ -746,14 +786,16 @@ private:
 
   // ---------- matching helper ----------
   int majorityParticleForTrack(const edm4hep::Track& trk,
-                               const std::unordered_map<podio::ObjectID, int>& hitToParticle) const {
+                               const std::unordered_map<podio::ObjectID, std::vector<int>>& hitToParticle,
+                               const std::unordered_map<int, std::vector<podio::ObjectID>>& hitsPerParticle) const {
     std::unordered_map<int, int> counts;
     for (const auto& h : trk.getTrackerHits()) {
       const auto hk = h.getObjectID();
       auto it = hitToParticle.find(hk);
       if (it == hitToParticle.end())
         continue;
-      counts[it->second] += 1;
+      for (int pid : it->second)
+        counts[pid] += 1;
     }
     if (counts.empty())
       return -1;
@@ -761,12 +803,21 @@ private:
     int bestP = -1;
     int bestN = -1;
     for (const auto& kv : counts) {
-      if (kv.second > bestN) {
+      if (kv.second > bestN || (kv.second == bestN && kv.first < bestP)) {
         bestN = kv.second;
         bestP = kv.first;
       }
     }
-    return bestP;
+    const double purity = double(bestN) / trk.getTrackerHits().size();
+    const auto truthHits = hitsPerParticle.find(bestP);
+    if (truthHits == hitsPerParticle.end() || truthHits->second.empty())
+      return -1;
+    const double completeness = double(bestN) / truthHits->second.size();
+    using TrackingValidationHelpers::doubleMatchingRatio;
+    const bool matched = m_finderEfficiencyDefinition.value() == 2
+                             ? purity >= doubleMatchingRatio && completeness >= doubleMatchingRatio
+                             : purity >= m_finderPurityThreshold.value();
+    return matched ? bestP : -1;
   }
 
   /**
@@ -796,7 +847,8 @@ private:
   template <typename PerfectMapT>
   void fillFitterTrees(int event, const edm4hep::MCParticleCollection& mcParts,
                        const edm4hep::TrackCollection& fittedTracks,
-                       const std::unordered_map<podio::ObjectID, int>& hitToParticle,
+                       const std::unordered_map<podio::ObjectID, std::vector<int>>& hitToParticle,
+                       const std::unordered_map<int, std::vector<podio::ObjectID>>& hitsPerParticle,
                        const PerfectMapT& perfectAtIPByPid, bool doPerfect) const {
 
     m_fit_vs_mc.clear();
@@ -814,7 +866,7 @@ private:
         continue;
       }
 
-      const int pid = majorityParticleForTrack(trk, hitToParticle);
+      const int pid = majorityParticleForTrack(trk, hitToParticle, hitsPerParticle);
       if (pid < 0 || pid >= (int)mcParts.size()) {
         ++tIdx;
         continue;
@@ -832,9 +884,14 @@ private:
       reco.pT = TrackingValidationHelpers::ptFromState(*stReco, m_Bz.value());
       reco.p = TrackingValidationHelpers::momentumFromState(*stReco, m_Bz.value());
 
-      // ref from MC using the SAME convention as fitter (PCA + phi0 + ZPCA + omega=a*B/pT)
-      const TrackingValidationHelpers::HelixParams refMC = TrackingValidationHelpers::truthFromMC_GenfitConvention(
+      // Truth reference on the configured perigee, using the production direction.
+      const TrackingValidationHelpers::HelixParams refMC = TrackingValidationHelpers::truthPerigeeFromMC(
           mc, m_Bz.value(), m_refX.value(), m_refY.value(), m_refZ.value());
+
+      // Production vertex, to select particles for which the straight-line truth is exact
+      const auto& vtx = mc.getVertex();
+      const float vertexR = float(std::hypot(vtx.x, vtx.y));
+      const float vertexZ = float(vtx.z);
 
       // Track-parameter uncertainties from the fitted-state covariance matrix
 
@@ -880,6 +937,8 @@ private:
       m_fit_vs_mc.p_ref.push_back(refMC.p);
       m_fit_vs_mc.pT_reco.push_back(reco.pT);
       m_fit_vs_mc.pT_ref.push_back(refMC.pT);
+      m_fit_vs_mc.vertexR.push_back(vertexR);
+      m_fit_vs_mc.vertexZ.push_back(vertexZ);
 
       // --- vs perfect-fitted ---
       if (doPerfect) {
@@ -923,6 +982,8 @@ private:
           m_fit_vs_perfect.p_ref.push_back(refP.p);
           m_fit_vs_perfect.pT_reco.push_back(reco.pT);
           m_fit_vs_perfect.pT_ref.push_back(refP.pT);
+          m_fit_vs_perfect.vertexR.push_back(vertexR);
+          m_fit_vs_perfect.vertexZ.push_back(vertexZ);
         } else {
           m_fit_vs_perfect.track_index.push_back(tIdx);
           m_fit_vs_perfect.track_location.push_back(int(stReco->location));
@@ -945,6 +1006,8 @@ private:
           m_fit_vs_perfect.p_ref.push_back(NaN);
           m_fit_vs_perfect.pT_reco.push_back(reco.pT);
           m_fit_vs_perfect.pT_ref.push_back(NaN);
+          m_fit_vs_perfect.vertexR.push_back(vertexR);
+          m_fit_vs_perfect.vertexZ.push_back(vertexZ);
         }
       }
       ++tIdx;

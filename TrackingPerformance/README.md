@@ -109,12 +109,29 @@ The pull distributions are computed as
 pull = (reconstructed − reference) / σ
 where σ is taken from the corresponding diagonal element of the fitted track covariance matrix. Gaussian fits are performed for sufficiently populated pull distributions to facilitate validation of the covariance estimates.
 
+### Truth reference parameters
+
+The truth parameters in `fitter_vs_mc` are defined on the perigee at (`RefPointX`, `RefPointY`, `RefPointZ`), as in ACTS (`ResPlotTool`, `RootTrackSummaryWriter`):
+
+- `d0` and `z0` are taken at the closest approach to the beamline of the straight line along the particle's production direction;
+- `phi` and `tanLambda` come from the production momentum;
+- `omega` is computed from the particle's charge, `pT` and `Bz`.
+
+This is exact for particles produced on the beamline. For a particle produced at a distance L from it, the neglected curvature (radius R) biases `d0` by about L²/2R and `phi` by about L/R. The fitter trees store the production vertex (`vertexR`, `vertexZ`) of the matched particle so that such particles can be excluded.
+
 Additional plots may be added in future developments.
 ---
 
 ## Finder validation: efficiency and purity
 
-To evaluate finder performance, each reconstructed track is matched to the truth particle with which it shares the largest number of hits.
+To evaluate finder performance, each reconstructed track is matched to the truth particle with which it shares the largest number of hits (its majority particle).
+A reconstructed hit produced by several particles counts for each of them.
+The matching follows ACTS' `TrackTruthMatcher` (`Examples/Algorithms/TruthTracking`, acts-project/acts @ ce4824f9): only the majority particle can be matched, and a track whose majority particle is not in the input MC collection is not matched to any particle.
+
+In the output trees:
+
+- `finder_particle_to_tracks` lists, for each particle, the tracks for which it is the majority particle;
+- `finder_track_to_particles` lists, for each track, every contributing particle, with index `-1` for particles outside the input MC collection.
 
 For each particle-track pair, the algorithm stores two standard hit-based quantities:
 
@@ -126,7 +143,7 @@ The summary **tracking efficiency** can then be defined in more than one way.
 - **`FinderEfficiencyDefinition = 1`**
   A truth particle is counted as reconstructed if it is associated to at least one finder track with
   `purity >= FinderPurityThreshold`.
-  In the default configuration, `FinderPurityThreshold = 0.75`, following the CMS association convention in which a reconstructed track is associated to a simulated particle if more than 75% of its hits originate from that particle. The tracking efficiency is then defined as the fraction of simulated tracks associated to at least one reconstructed track. :contentReference[oaicite:0]{index=0}
+  In the default configuration, `FinderPurityThreshold = 0.75`, following the CMS association convention in which a reconstructed track is associated to a simulated particle if more than 75% of its hits originate from that particle. The tracking efficiency is then defined as the fraction of simulated tracks associated to at least one reconstructed track.
 
 - **`FinderEfficiencyDefinition = 2`**
   A truth particle is counted as reconstructed if it is associated to at least one finder track with
@@ -134,6 +151,9 @@ The summary **tracking efficiency** can then be defined in more than one way.
   This corresponds to the stricter two-ratio variant, where both the purity of the reconstructed track and the fraction of recovered truth hits must exceed 50%.
 
 In the current implementation, the denominator of the efficiency plot includes generator-level particles with status 1 and at least one truth-linked hit.
+The uncertainties of the efficiency plot are Clopper-Pearson intervals at 68.3% confidence level, as for ROOT's `TEfficiency` default.
+
+The same matching criterion selects the tracks of the fitter trees: a fitted or perfect-fitted track enters `fitter_vs_mc` and `fitter_vs_perfect` only if it is matched to a particle of the input MC collection.
 For more details on the CMS association convention and the related definitions of tracking efficiency, fake rate, and duplicate rate, see the CMS performance note [*Performance of the track selection DNN in Run 3*](https://cds.cern.ch/record/2854696/files/DP2023_009.pdf).
 
 
@@ -233,10 +253,15 @@ The CLD collection names are passed explicitly to the steering file:
 
 ```text
 mcParticles  = MCPhysicsParticles
-hitSimLinks  = VXDTrackerHitRelations
+hitSimLinks  = VXDTrackerHitRelations,VXDEndcapTrackerHitRelations,
+               InnerTrackerBarrelHitsRelations,InnerTrackerEndcapHitsRelations,
+               OuterTrackerBarrelHitsRelations,OuterTrackerEndcapHitsRelations
 finderTracks = SiTracks
 fittedTracks = FittedTracks
 ```
+
+All tracker link collections are needed: hits without a link count against the purity, so with only some of them the tracks fail the matching and the trees stay empty.
+After the run, the test checks that the output holds at least 900 truth particles and 900 matched fitted tracks, a tracking efficiency of at least 0.95 in every momentum bin, and a median |d0 residual| below 10 µm.
 
 The boolean steering options accept both `true/false` and `1/0` inputs.
 

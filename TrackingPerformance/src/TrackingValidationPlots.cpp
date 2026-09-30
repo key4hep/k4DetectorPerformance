@@ -18,10 +18,12 @@
  */
 #include "TrackingValidationPlots.h"
 #include "TAxis.h"
+#include "TEfficiency.h"
 #include "TF1.h"
 #include "TH1F.h"
 #include "TPaveStats.h"
 #include "TStyle.h"
+#include "TrackingValidationHelpers.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -60,11 +62,14 @@ namespace {
 
 std::vector<double> makeLogBins(double min, double max, double step) {
   std::vector<double> bins;
-  for (double x = std::log10(min); x <= std::log10(max); x += step) {
-    bins.push_back(std::pow(10., x));
+  const double logMin = std::log10(min);
+  const double logMax = std::log10(max);
+  // Edges from an integer index with a tolerance: accumulating x += step drifts,
+  // and the last edge could land just below max, leaving a zero-width bin.
+  for (int i = 0; logMin + i * step < logMax - 1e-9 * step; ++i) {
+    bins.push_back(std::pow(10., logMin + i * step));
   }
-  if (bins.empty() || bins.back() < max)
-    bins.push_back(max);
+  bins.push_back(max);
   return bins;
 }
 
@@ -477,8 +482,8 @@ TCanvas* drawResolutionCanvas(TGraphErrors* g, const char* canvasName, const cha
   return c;
 }
 
-TGraphErrors* makeEfficiencyVsMomentum(TTree* finderTree, const char* graphName, int efficiencyDefinition,
-                                       double purityThreshold, double pMin, double pMax, double logStep) {
+TGraphAsymmErrors* makeEfficiencyVsMomentum(TTree* finderTree, const char* graphName, int efficiencyDefinition,
+                                            double purityThreshold, double pMin, double pMax, double logStep) {
   if (!finderTree)
     return nullptr;
 
@@ -535,7 +540,8 @@ TGraphErrors* makeEfficiencyVsMomentum(TTree* finderTree, const char* graphName,
         const float efficiency = efficiencies[j];
 
         if (efficiencyDefinition == 2) {
-          if (purity >= 0.5f && efficiency >= 0.5f) {
+          if (purity >= TrackingValidationHelpers::doubleMatchingRatio &&
+              efficiency >= TrackingValidationHelpers::doubleMatchingRatio) {
             isMatched = true;
             break;
           }
@@ -552,7 +558,7 @@ TGraphErrors* makeEfficiencyVsMomentum(TTree* finderTree, const char* graphName,
     }
   }
 
-  TGraphErrors* g = new TGraphErrors();
+  TGraphAsymmErrors* g = new TGraphAsymmErrors();
   g->SetName(graphName);
   g->SetTitle(";p [GeV];Tracking efficiency");
 
@@ -562,18 +568,23 @@ TGraphErrors* makeEfficiencyVsMomentum(TTree* finderTree, const char* graphName,
       continue;
 
     const double eff = double(nNum[b]) / double(nDen[b]);
-    const double err = std::sqrt(eff * (1.0 - eff) / double(nDen[b]));
+    // The normal approximation gives zero uncertainty at efficiency 0 or 1.
+    // Use exact binomial intervals, including at the boundaries.
+    constexpr double confidenceLevel = 0.682689492137;
+    const double lower = TEfficiency::ClopperPearson(nDen[b], nNum[b], confidenceLevel, false);
+    const double upper = TEfficiency::ClopperPearson(nDen[b], nNum[b], confidenceLevel, true);
     const double pCenter = std::sqrt(bins[b] * bins[b + 1]);
 
     g->SetPoint(ip, pCenter, eff);
-    g->SetPointError(ip, 0.0, err);
+    g->SetPointError(ip, 0.0, 0.0, eff - lower, upper - eff);
     ++ip;
   }
   finderTree->ResetBranchAddresses();
   return g;
 }
 
-TCanvas* drawEfficiencyCanvas(TGraphErrors* g, const char* canvasName, const char* title, double xMin, double xMax) {
+TCanvas* drawEfficiencyCanvas(TGraphAsymmErrors* g, const char* canvasName, const char* title, double xMin,
+                              double xMax) {
   if (!g)
     return nullptr;
 

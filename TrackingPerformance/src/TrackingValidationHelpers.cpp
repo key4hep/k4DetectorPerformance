@@ -23,131 +23,50 @@
 #include <limits>
 
 namespace TrackingValidationHelpers {
+namespace {
+  constexpr double momentumScale = 0.000299792458; // GeV / (T mm)
+  constexpr double nan = std::numeric_limits<double>::quiet_NaN();
+} // namespace
 
-// Constants matching the fitter code
-static constexpr float c_mm_s = 2.998e11f;
-static constexpr float a_genfit = 1e-15f * c_mm_s;
-
-float wrapDeltaPhi(float a, float b) {
-  float d = a - b;
-  while (d > M_PI)
-    d -= 2.f * M_PI;
-  while (d < -M_PI)
-    d += 2.f * M_PI;
-  return d;
+double wrapDeltaPhi(double a, double b) {
+  if (!std::isfinite(a) || !std::isfinite(b))
+    return nan;
+  return std::remainder(a - b, 2. * M_PI);
 }
 
-PCAInfoHelper PCAInfo_mm(float x, float y, float z, float px, float py, float pz, int chargeSign, float refX,
-                         float refY, float Bz) {
+PCAInfoHelper PCAInfo_mm(double x, double y, double z, double px, double py, double pz, double refX, double refY) {
   PCAInfoHelper out;
-
-  const float pt = std::sqrt(px * px + py * py);
-  if (pt == 0.f)
+  const double pt2 = px * px + py * py;
+  if (!(pt2 > 0.) || !std::isfinite(pt2))
     return out;
-  if (chargeSign == 0)
-    chargeSign = 1;
-  if (Bz == 0.f)
-    return out;
-
-  const float R = pt / (0.3f * std::abs(chargeSign) * Bz) * 1000.f;
-
-  const float tx = px / pt;
-  const float ty = py / pt;
-
-  const float nx = float(chargeSign) * ty;
-  const float ny = float(chargeSign) * (-tx);
-
-  const float xc = x + R * nx;
-  const float yc = y + R * ny;
-
-  const float vx = refX - xc;
-  const float vy = refY - yc;
-  const float vxy = std::sqrt(vx * vx + vy * vy);
-  if (vxy == 0.f)
-    return out;
-
-  const float ux = vx / vxy;
-  const float uy = vy / vxy;
-
-  const float pcaX = xc + R * ux;
-  const float pcaY = yc + R * uy;
-
-  const float rx = pcaX - xc;
-  const float ry = pcaY - yc;
-
-  const int sign = (chargeSign > 0) ? 1 : -1;
-  float tanX = -sign * ry;
-  float tanY = sign * rx;
-
-  const float tnorm = std::sqrt(tanX * tanX + tanY * tanY);
-  if (tnorm == 0.f)
-    return out;
-
-  tanX /= tnorm;
-  tanY /= tnorm;
-
-  const float phi0 = std::atan2(tanY, tanX);
-
-  const float pR = pt;
-  const float pZ = pz;
-  const float R0 = std::sqrt(x * x + y * y);
-  const float Z0 = z;
-
-  const float denom = (pR * pR + pZ * pZ);
-  if (denom == 0.f)
-    return out;
-
-  const float tPCA = -(R0 * pR + Z0 * pZ) / denom;
-  const float ZPCA = Z0 + pZ * tPCA;
-
-  out.pcaX = pcaX;
-  out.pcaY = pcaY;
-  out.pcaZ = ZPCA;
-  out.phi0 = phi0;
-  out.ok = true;
+  // Closest approach of the production direction to a beamline parallel to z.
+  // a particle already on the beamline keeps its production z coordinate.
+  const double pathOverPt = -((x - refX) * px + (y - refY) * py) / pt2;
+  out.pcaX = x + pathOverPt * px;
+  out.pcaY = y + pathOverPt * py;
+  out.pcaZ = z + pathOverPt * pz;
+  out.phi0 = std::atan2(py, px);
+  out.ok = std::isfinite(out.pcaX) && std::isfinite(out.pcaY) && std::isfinite(out.pcaZ);
   return out;
 }
 
-HelixParams truthFromMC_GenfitConvention(const edm4hep::MCParticle& mc, float Bz, float refX, float refY, float refZ) {
-  HelixParams hp;
-
-  const auto& mom = mc.getMomentum();
-  const float px = float(mom.x);
-  const float py = float(mom.y);
-  const float pz = float(mom.z);
-
-  const float pT = std::sqrt(px * px + py * py);
-  const float p = std::sqrt(px * px + py * py + pz * pz);
-
-  hp.pT = pT;
-  hp.p = p;
-
-  int qSign = 1;
-  if (mc.getCharge() < 0.f)
-    qSign = -1;
-
+HelixParams truthPerigeeFromMC(const edm4hep::MCParticle& mc, double Bz, double refX, double refY, double refZ) {
+  const auto& p = mc.getMomentum();
   const auto& v = mc.getVertex();
-  const float x = float(v.x);
-  const float y = float(v.y);
-  const float z = float(v.z);
-
-  const auto info = PCAInfo_mm(x, y, z, px, py, pz, qSign, refX, refY, Bz);
-  if (!info.ok) {
-    const float NaN = std::numeric_limits<float>::quiet_NaN();
-    hp.D0 = NaN;
-    hp.Z0 = NaN;
-    hp.phi = NaN;
-    hp.omega = NaN;
-    hp.tanLambda = NaN;
+  HelixParams hp;
+  hp.pT = std::hypot(p.x, p.y);
+  hp.p = std::hypot(hp.pT, p.z);
+  const auto pca = PCAInfo_mm(v.x, v.y, v.z, p.x, p.y, p.z, refX, refY);
+  if (!pca.ok) {
+    hp.D0 = hp.Z0 = hp.phi = hp.omega = hp.tanLambda = nan;
     return hp;
   }
-
-  hp.D0 = ((-(refX - info.pcaX)) * std::sin(info.phi0) + (refY - info.pcaY) * std::cos(info.phi0));
-  hp.Z0 = (info.pcaZ - refZ);
-  hp.phi = std::atan2(py, px);
-  hp.tanLambda = (pT > 0.f) ? (pz / pT) : 0.f;
-  hp.omega = (pT > 0.f) ? (std::abs(a_genfit * Bz / pT) * float(qSign)) : 0.f;
-
+  // Project the displacement directly: no subtraction of large helix radii.
+  hp.D0 = (-(v.x - refX) * p.y + (v.y - refY) * p.x) / hp.pT;
+  hp.Z0 = pca.pcaZ - refZ;
+  hp.phi = pca.phi0;
+  hp.tanLambda = p.z / hp.pT;
+  hp.omega = momentumScale * Bz * mc.getCharge() / hp.pT;
   return hp;
 }
 
@@ -160,17 +79,15 @@ std::optional<edm4hep::TrackState> getAtIPState(const edm4hep::Track& trk) {
   return std::nullopt;
 }
 
-float ptFromState(const edm4hep::TrackState& st, float Bz) {
-  const float omega = std::abs(float(st.omega));
-  if (omega == 0.f)
-    return 0.f;
-  return a_genfit * std::abs(Bz) / omega;
+double ptFromState(const edm4hep::TrackState& st, double Bz) {
+  const double omega = std::abs(st.omega);
+  if (!(omega > 0.) || !std::isfinite(omega) || !std::isfinite(Bz) || Bz == 0.)
+    return nan;
+  return momentumScale * std::abs(Bz) / omega;
 }
 
-float momentumFromState(const edm4hep::TrackState& st, float Bz) {
-  const float pT = ptFromState(st, Bz);
-  const float tl = float(st.tanLambda);
-  return pT * std::sqrt(1.f + tl * tl);
+double momentumFromState(const edm4hep::TrackState& st, double Bz) {
+  return ptFromState(st, Bz) * std::hypot(1., st.tanLambda);
 }
 
 } // namespace TrackingValidationHelpers

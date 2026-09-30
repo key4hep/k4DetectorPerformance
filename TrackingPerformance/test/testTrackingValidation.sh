@@ -96,7 +96,7 @@ k4run "${RUN_FILE}" \
   --mode 0 \
   --doPerfectFit 0 \
   --mcParticles "MCPhysicsParticles" \
-  --hitSimLinks "VXDTrackerHitRelations" \
+  --hitSimLinks "VXDTrackerHitRelations,VXDEndcapTrackerHitRelations,InnerTrackerBarrelHitsRelations,InnerTrackerEndcapHitsRelations,OuterTrackerBarrelHitsRelations,OuterTrackerEndcapHitsRelations" \
   --finderTracks "SiTracks" \
   --fittedTracks "FittedTracks" \
   --finderEfficiencyDefinition 1 \
@@ -113,6 +113,36 @@ if [ ! -s "${VALIDATION_FILE}" ]; then
   echo "ERROR: validation output is empty: ${VALIDATION_FILE}"
   exit 1
 fi
+
+# Loose physics checks on the 1000-muon sample, so that a wrong collection name
+# or a matching bug (which leaves the trees empty) fails the test.
+python3 - "${VALIDATION_FILE}" <<'EOF'
+import sys
+import ROOT
+
+f = ROOT.TFile.Open(sys.argv[1])
+errors = []
+
+nParticles = sum(ev.index.size() for ev in f.Get("finder_particle_to_tracks"))
+if nParticles < 900:
+    errors.append(f"only {nParticles} truth particles in finder_particle_to_tracks")
+
+g = f.Get("g_efficiency_vs_p")
+if not g or g.GetN() == 0:
+    errors.append("g_efficiency_vs_p is missing or empty")
+elif min(g.GetPointY(i) for i in range(g.GetN())) < 0.95:
+    errors.append("tracking efficiency below 0.95 in some momentum bin")
+
+absResD0 = sorted(abs(x) for ev in f.Get("fitter_vs_mc") for x in ev.resD0)
+if len(absResD0) < 900:
+    errors.append(f"only {len(absResD0)} matched fitted tracks in fitter_vs_mc")
+elif absResD0[len(absResD0) // 2] > 0.01:
+    errors.append(f"median |d0 residual| {absResD0[len(absResD0) // 2]} mm exceeds 10 um")
+
+for e in errors:
+    print("ERROR:", e)
+sys.exit(1 if errors else 0)
+EOF
 
 echo "Validation test completed successfully."
 echo "Validation file: ${VALIDATION_FILE}"

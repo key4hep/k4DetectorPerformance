@@ -27,57 +27,54 @@
 
 namespace TrackingValidationHelpers {
 
-/// Container for helix parameters in the fitter convention
+/// Purity and completeness both required by FinderEfficiencyDefinition = 2
+/// (ACTS TrackTruthMatcher with doubleMatching and matchingRatio = 0.5)
+inline constexpr double doubleMatchingRatio = 0.5;
+
+/// EDM4hep helix parameters; geometry is evaluated in double precision
 struct HelixParams {
-  float D0 = 0.f;
-  float Z0 = 0.f;
-  float phi = 0.f;
-  float omega = 0.f;
-  float tanLambda = 0.f;
-  float p = 0.f;
-  float pT = 0.f;
+  double D0 = 0.;
+  double Z0 = 0.;
+  double phi = 0.;
+  double omega = 0.;
+  double tanLambda = 0.;
+  double p = 0.;
+  double pT = 0.;
 };
 
 /// Helper container for PCA position and tangent angle
 struct PCAInfoHelper {
-  float pcaX = 0.f;
-  float pcaY = 0.f;
-  float pcaZ = 0.f;
-  float phi0 = 0.f;
+  double pcaX = 0.;
+  double pcaY = 0.;
+  double pcaZ = 0.;
+  double phi0 = 0.;
   bool ok = false;
 };
 /// Wrap a phi difference into the interval [-pi, pi]
-float wrapDeltaPhi(float a, float b);
+double wrapDeltaPhi(double a, double b);
+
+/// Straight-line closest approach of the production direction to the beamline
+/// through (refX, refY), in mm
+PCAInfoHelper PCAInfo_mm(double x, double y, double z, double px, double py, double pz, double refX, double refY);
 
 /**
- * @brief Compute the PCA position and tangent angle in mm using a GenFit-like convention.
+ * @brief Truth helix parameters of an MC particle on the perigee at (refX, refY, refZ).
  *
- * The function derives the point of closest approach to the reference point
- * and the corresponding tangent direction from the input position, momentum,
- * charge sign, and magnetic field.
+ * As in ACTS (ResPlotTool::fill, RootTrackSummaryWriter; acts-project/acts @ ce4824f9),
+ * d0 and z0 come from the straight line along the production direction, and phi and
+ * tanLambda from the production momentum. Exact for particles produced on the beamline;
+ * for displaced particles the neglected curvature biases d0 by ~L^2/2R and phi by ~L/R.
  */
-
-PCAInfoHelper PCAInfo_mm(float x, float y, float z, float px, float py, float pz, int chargeSign, float refX,
-                         float refY, float Bz);
-
-/**
- * @brief Build truth helix parameters in the same convention used by the fitter.
- *
- * The returned parameters are derived from the MC particle kinematics and vertex
- * using the same reference-point and helix convention adopted for fitted tracks,
- * so that residuals can be computed consistently.
- */
-
-HelixParams truthFromMC_GenfitConvention(const edm4hep::MCParticle& mc, float Bz, float refX, float refY, float refZ);
+HelixParams truthPerigeeFromMC(const edm4hep::MCParticle& mc, double Bz, double refX, double refY, double refZ);
 
 /// Retrieve the track state stored at the interaction point, if available
 std::optional<edm4hep::TrackState> getAtIPState(const edm4hep::Track& trk);
 
 /// Compute the transverse momentum from a track state
-float ptFromState(const edm4hep::TrackState& st, float Bz);
+double ptFromState(const edm4hep::TrackState& st, double Bz);
 
 /// Compute the total momentum from a track state
-float momentumFromState(const edm4hep::TrackState& st, float Bz);
+double momentumFromState(const edm4hep::TrackState& st, double Bz);
 
 } // namespace TrackingValidationHelpers
 
