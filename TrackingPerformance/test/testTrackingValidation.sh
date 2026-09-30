@@ -117,6 +117,7 @@ fi
 # Loose physics checks on the 1000-muon sample, so that a wrong collection name
 # or a matching bug (which leaves the trees empty) fails the test.
 python3 - "${VALIDATION_FILE}" <<'EOF'
+import math
 import sys
 import ROOT
 
@@ -133,9 +134,10 @@ if not g or g.GetN() == 0:
 elif min(g.GetPointY(i) for i in range(g.GetN())) < 0.95:
     errors.append("tracking efficiency below 0.95 in some momentum bin")
 
-absResD0 = sorted(abs(x) for ev in f.Get("fitter_vs_mc") for x in ev.resD0)
+# NaN residuals (e.g. an invalid truth perigee) must not pass as matched tracks
+absResD0 = sorted(abs(x) for ev in f.Get("fitter_vs_mc") for x in ev.resD0 if math.isfinite(x))
 if len(absResD0) < 900:
-    errors.append(f"only {len(absResD0)} matched fitted tracks in fitter_vs_mc")
+    errors.append(f"only {len(absResD0)} matched fitted tracks with finite resD0 in fitter_vs_mc")
 elif absResD0[len(absResD0) // 2] > 0.01:
     errors.append(f"median |d0 residual| {absResD0[len(absResD0) // 2]} mm exceeds 10 um")
 
