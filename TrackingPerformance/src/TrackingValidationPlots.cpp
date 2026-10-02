@@ -490,9 +490,9 @@ TGraphAsymmErrors* makeEfficiencyVsMomentum(TTree* finderTree, const char* graph
   std::vector<double> bins = makeLogBins(pMin, pMax, logStep);
   const int nBins = bins.size() - 1;
 
-  std::vector<int> nDen(nBins, 0);
-  std::vector<int> nNum(nBins, 0);
 
+  TEfficiency eff(graphName, "", nBins, bins.data());
+  eff.SetDirectory(nullptr); 
   std::vector<float>* pVec = nullptr;
   std::vector<std::vector<float>>* purVec = nullptr;
   std::vector<std::vector<float>>* effVec = nullptr;
@@ -516,18 +516,6 @@ TGraphAsymmErrors* makeEfficiencyVsMomentum(TTree* finderTree, const char* graph
       const double p = (*pVec)[i];
       if (!std::isfinite(p) || p < pMin || p >= pMax)
         continue;
-
-      int bin = -1;
-      for (int b = 0; b < nBins; ++b) {
-        if (p >= bins[b] && p < bins[b + 1]) {
-          bin = b;
-          break;
-        }
-      }
-      if (bin < 0)
-        continue;
-
-      nDen[bin]++;
 
       bool isMatched = false;
 
@@ -553,8 +541,7 @@ TGraphAsymmErrors* makeEfficiencyVsMomentum(TTree* finderTree, const char* graph
         }
       }
 
-      if (isMatched)
-        nNum[bin]++;
+      eff.Fill(isMatched, p);
     }
   }
 
@@ -562,21 +549,17 @@ TGraphAsymmErrors* makeEfficiencyVsMomentum(TTree* finderTree, const char* graph
   g->SetName(graphName);
   g->SetTitle(";p [GeV];Tracking efficiency");
 
+  // TEfficiency::CreateGraph() would put the points at the arithmetic bin centre with x errors
+  // spanning the bin; use the geometric centre of the log-spaced bins and no x errors instead.
   int ip = 0;
-  for (int b = 0; b < nBins; ++b) {
-    if (nDen[b] == 0)
+  for (int b = 1; b <= nBins; ++b) {
+    if (eff.GetTotalHistogram()->GetBinContent(b) == 0)
       continue;
 
-    const double eff = double(nNum[b]) / double(nDen[b]);
-    // The normal approximation gives zero uncertainty at efficiency 0 or 1.
-    // Use exact binomial intervals, including at the boundaries.
-    constexpr double confidenceLevel = 0.682689492137;
-    const double lower = TEfficiency::ClopperPearson(nDen[b], nNum[b], confidenceLevel, false);
-    const double upper = TEfficiency::ClopperPearson(nDen[b], nNum[b], confidenceLevel, true);
-    const double pCenter = std::sqrt(bins[b] * bins[b + 1]);
+    const double pCenter = std::sqrt(bins[b - 1] * bins[b]);
 
-    g->SetPoint(ip, pCenter, eff);
-    g->SetPointError(ip, 0.0, 0.0, eff - lower, upper - eff);
+    g->SetPoint(ip, pCenter, eff.GetEfficiency(b));
+    g->SetPointError(ip, 0.0, 0.0, eff.GetEfficiencyErrorLow(b), eff.GetEfficiencyErrorUp(b));
     ++ip;
   }
   finderTree->ResetBranchAddresses();
