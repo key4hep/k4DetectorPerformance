@@ -112,6 +112,16 @@ struct TrackingValidation final
   StatusCode initialize() override {
     info() << "Initializing TrackingValidationConsumer" << endmsg;
 
+    // Reject values without an implementation instead of silently treating them as another option
+    if (m_mode.value() < 0 || m_mode.value() > 2) {
+      error() << "Mode must be 0, 1 or 2, got " << m_mode.value() << endmsg;
+      return StatusCode::FAILURE;
+    }
+    if (m_finderEfficiencyDefinition.value() != 1 && m_finderEfficiencyDefinition.value() != 2) {
+      error() << "FinderEfficiencyDefinition must be 1 or 2, got " << m_finderEfficiencyDefinition.value() << endmsg;
+      return StatusCode::FAILURE;
+    }
+
     m_outFile = std::make_unique<TFile>(m_outputFile.value().c_str(), "RECREATE");
     if (!m_outFile || m_outFile->IsZombie()) {
       error() << "Cannot open output file: " << m_outputFile.value() << endmsg;
