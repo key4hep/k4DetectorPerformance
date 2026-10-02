@@ -490,9 +490,9 @@ TGraphAsymmErrors* makeEfficiencyVsMomentum(TTree* finderTree, const char* graph
   std::vector<double> bins = makeLogBins(pMin, pMax, logStep);
   const int nBins = bins.size() - 1;
 
-
   TEfficiency eff(graphName, "", nBins, bins.data());
-  eff.SetDirectory(nullptr); 
+  eff.SetDirectory(nullptr);
+
   std::vector<float>* pVec = nullptr;
   std::vector<std::vector<float>>* purVec = nullptr;
   std::vector<std::vector<float>>* effVec = nullptr;
