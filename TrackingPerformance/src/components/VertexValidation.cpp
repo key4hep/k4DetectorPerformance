@@ -34,6 +34,7 @@
 
 // ROOT
 #include "TCanvas.h"
+#include "TEfficiency.h"
 #include "TF1.h"
 #include "TFile.h"
 #include "TH1F.h"
@@ -78,6 +79,13 @@
  *  (Examples/Io/Root/src/RootVertexNTupleWriter.cpp, same commit): one tree
  *  entry per event, per-vertex quantities stored as vectors, residual = reco -
  *  truth and pull = residual / sigma_reco.
+ *
+ *  Besides finding the truth primary vertex, a producer has to pick it as the
+ *  primary one: the PV selection efficiency counts the events where the vertex
+ *  it flags as primary is the clean match of the truth primary vertex. The
+ *  tracks of the truth primary vertex (those whose MC particle was produced
+ *  there) give truth-side quantities, their number and sum pT^2, that are the
+ *  same for every producer run on the same tracks.
  *
  *  input:
  *    - MC particle collection         : edm4hep::MCParticleCollection
@@ -186,6 +194,21 @@ struct VertexValidation final
     }
     m_tree.nTracksEvent = static_cast<int>(trackTruth.size());
 
+    // Tracks of the truth primary vertex. Performance plotted against their
+    // number or sum pT^2 puts the same events in a bin for every producer, as
+    // opposed to the producer's own track count. A duplicated track counts
+    // twice, as the vertexer sees it twice.
+    double truthPVSumPt2 = 0.;
+    for (const auto& entry : trackTruth) {
+      const edm4hep::MCParticle& mc = *entry.second.second;
+      if (samePosition(mc.getVertex(), truthPV)) {
+        ++m_tree.nTracksTruthPV;
+        const auto& p = mc.getMomentum();
+        truthPVSumPt2 += p.x * p.x + p.y * p.y;
+      }
+    }
+    m_tree.truthPVSumPt2 = static_cast<float>(truthPVSumPt2);
+
     // ---------- track weights in the vertex fit ----------
     std::map<std::pair<ObjectKey, ObjectKey>, float> trackWeights;
     for (const auto* links : vertexParticleLinks) {
@@ -203,6 +226,8 @@ struct VertexValidation final
 
     // truth vertex index -> (reco vertex index, sum pT^2) of its best match
     std::map<int, std::pair<std::size_t, double>> truthToReco;
+    // per reco vertex: its tracks whose MC particle comes from the truth PV
+    std::vector<int> tracksFromTruthPV;
 
     for (std::size_t i = 0; i < vertices.size(); ++i) {
       const auto vtx = vertices[i];
@@ -223,6 +248,7 @@ struct VertexValidation final
       double sumPt2 = 0.;
       int nTracks = 0;
       int nTruthLinkedTracks = 0;
+      int nFromTruthPV = 0;
       std::map<int, double> weightPerTruthVertex;
       for (const auto& particle : vtx.getParticles()) {
         float weight = 1.f;
@@ -241,8 +267,12 @@ struct VertexValidation final
         for (const auto& track : particle.getTracks()) {
           const auto it = trackTruth.find(key(track));
           if (it != trackTruth.end()) {
-            weightPerTruthVertex[truthVertexIndex(it->second.second->getVertex())] += weight;
+            const int truthIndex = truthVertexIndex(it->second.second->getVertex());
+            weightPerTruthVertex[truthIndex] += weight;
             ++nTruthLinkedTracks;
+            if (truthIndex == 0) {
+              ++nFromTruthPV;
+            }
             break; // one truth particle per reconstructed particle
           }
         }
@@ -300,6 +330,7 @@ struct VertexValidation final
       m_tree.classification.push_back(static_cast<float>(classification));
       m_tree.isPrimary.push_back(vtx.isPrimary() ? 1.f : 0.f);
       m_tree.covPosDef.push_back(positiveDefinite(cov) ? 1.f : 0.f);
+      tracksFromTruthPV.push_back(nFromTruthPV);
 
       if (vtx.isPrimary() && pvIndex < 0) {
         pvIndex = static_cast<int>(i);
@@ -319,6 +350,11 @@ struct VertexValidation final
         it != truthToReco.end() && static_cast<int>(m_tree.classification[it->second.first]) == Clean) {
       m_tree.truthPVFoundClean = 1;
       ++m_nEventsTruthPVClean;
+      // ...and the producer picked that vertex as the primary one
+      if (static_cast<int>(it->second.first) == pvIndex) {
+        m_tree.recoPVIsTruthPV = 1;
+        ++m_nEventsRecoPVIsTruthPV;
+      }
     }
 
     // The primary-vertex branches hold zero or one entry per event, so events
@@ -335,12 +371,14 @@ struct VertexValidation final
       m_tree.pvSigmaY.push_back(m_tree.sigmaY[pvIndex]);
       m_tree.pvSigmaZ.push_back(m_tree.sigmaZ[pvIndex]);
       m_tree.pvNTracks.push_back(m_tree.nTracks[pvIndex]);
+      m_tree.pvMatchFraction.push_back(m_tree.matchFraction[pvIndex]);
       if (m_tree.covPosDef[pvIndex] == 0.f) {
         ++m_nPVBadCovariance;
       }
-      // Both counts are of truth-linked tracks, so the fraction is at most one
-      if (m_tree.nTracksEvent > 0) {
-        m_tree.pvTrackFraction.push_back(m_tree.nTruthLinkedTracks[pvIndex] / static_cast<float>(m_tree.nTracksEvent));
+      // Both counts are of tracks from the truth PV, so the fraction is at most
+      // one; tracks from secondary vertices in the event do not lower it.
+      if (m_tree.nTracksTruthPV > 0) {
+        m_tree.pvTrackFraction.push_back(tracksFromTruthPV[pvIndex] / static_cast<float>(m_tree.nTracksTruthPV));
       }
       m_pvResiduals[0].push_back(m_tree.resX[pvIndex]);
       m_pvResiduals[1].push_back(m_tree.resY[pvIndex]);
@@ -354,7 +392,8 @@ struct VertexValidation final
   StatusCode finalize() override {
     info() << "Finalizing VertexValidation, processed " << m_evt << " events, " << m_nEventsWithRecoPV
            << " with a reconstructed primary vertex, " << m_nEventsTruthPVClean
-           << " with the truth primary vertex matched by a clean vertex" << endmsg;
+           << " with the truth primary vertex matched by a clean vertex, " << m_nEventsRecoPVIsTruthPV
+           << " of them with that vertex flagged as primary" << endmsg;
     info() << "Reconstructed vertices: " << m_classificationCounts[Clean] << " clean, "
            << m_classificationCounts[Merged] << " merged, " << m_classificationCounts[Split] << " split" << endmsg;
     if (m_nPVBadCovariance > 0) {
@@ -440,9 +479,8 @@ struct VertexValidation final
     writeHistogram("pvChi2Ndf", "h_pv_chi2ndf", "PV fit quality", "#chi^{2}/ndf", 100, 0.0, 10.0);
     writeHistogram("pvNTracks", "h_pv_ntracks", "Tracks used by the PV", "N_{tracks} (weight #geq threshold)", 31, -0.5,
                    30.5);
-    writeHistogram("pvTrackFraction", "h_pv_track_fraction",
-                   "Fraction of the event's truth-linked tracks used by the PV",
-                   "N_{truth-linked tracks, PV} / N_{truth-linked tracks, event}", 44, 0.0, 1.1);
+    writeHistogram("pvTrackFraction", "h_pv_track_fraction", "Fraction of the truth PV's tracks used by the PV",
+                   "N_{tracks from truth PV, PV} / N_{tracks from truth PV, event}", 44, 0.0, 1.1);
     writeHistogram("matchFraction", "h_match_fraction", "Truth match fraction of reconstructed vertices",
                    "matched track weight / total track weight", 44, 0.0, 1.1);
     if (TH1F* h = writeHistogram("classification", "h_vertex_classification",
@@ -458,19 +496,37 @@ struct VertexValidation final
     m_tree.tree->Project("h_n_reco_vertices", "nRecoVtx");
     hNVtx->Write();
 
+    // ---------- PV efficiency versus the truth PV's track multiplicity ----------
+    auto* hTotal =
+        new TH1F("h_ntracks_truth_pv", "Reconstructed tracks from the truth PV;N_{tracks};Events", 51, -0.5, 50.5);
+    auto* hPassed = new TH1F("h_ntracks_truth_pv_found", "", 51, -0.5, 50.5);
+    m_tree.tree->Project("h_ntracks_truth_pv", "nTracksTruthPV");
+    m_tree.tree->Project("h_ntracks_truth_pv_found", "nTracksTruthPV", "truthPVFoundClean == 1");
+    hTotal->Write();
+    auto* effVsNTracks = new TEfficiency(*hPassed, *hTotal);
+    effVsNTracks->SetName("eff_pv_vs_ntracks_truth_pv");
+    effVsNTracks->SetTitle("PV efficiency;Reconstructed tracks from the truth PV;Truth PV matched by a clean vertex");
+    effVsNTracks->Write();
+
     // ---------- headline numbers ----------
     // One entry, so a notebook or script reads the numbers instead of
     // recomputing them. Residuals in um; the PV efficiency is the fraction of
-    // events whose truth PV is matched by a clean reconstructed vertex.
+    // events whose truth PV is matched by a clean reconstructed vertex, the PV
+    // selection efficiency the fraction where that vertex is also the one
+    // flagged as primary.
     auto* summary = new TTree("summary", "Headline numbers of the vertex validation");
     int nEvents = m_evt, nRecoPV = m_nEventsWithRecoPV, nTruthPVClean = m_nEventsTruthPVClean;
+    int nRecoPVIsTruthPV = m_nEventsRecoPVIsTruthPV;
     int nClean = m_classificationCounts[Clean], nMerged = m_classificationCounts[Merged];
     int nSplit = m_classificationCounts[Split], nPVBadCov = m_nPVBadCovariance;
     float pvEfficiency = nEvents > 0 ? static_cast<float>(nTruthPVClean) / nEvents : 0.f;
+    float pvSelectionEfficiency = nEvents > 0 ? static_cast<float>(nRecoPVIsTruthPV) / nEvents : 0.f;
     summary->Branch("nEvents", &nEvents);
     summary->Branch("nEventsWithRecoPV", &nRecoPV);
     summary->Branch("nEventsTruthPVClean", &nTruthPVClean);
+    summary->Branch("nEventsRecoPVIsTruthPV", &nRecoPVIsTruthPV);
     summary->Branch("pvEfficiency", &pvEfficiency);
+    summary->Branch("pvSelectionEfficiency", &pvSelectionEfficiency);
     summary->Branch("nClean", &nClean);
     summary->Branch("nMerged", &nMerged);
     summary->Branch("nSplit", &nSplit);
@@ -506,7 +562,10 @@ private:
     int nRecoVtx = 0;
     int nTrueVtx = 0;
     int nTracksEvent = 0;                           // tracks with a truth link in the event
+    int nTracksTruthPV = 0;                         // of them, tracks whose MC particle comes from the truth PV
+    float truthPVSumPt2 = 0.f;                      // sum of their MC particles' pT^2 [GeV^2]
     int truthPVFoundClean = 0;                      // truth PV matched by a clean reco vertex
+    int recoPVIsTruthPV = 0;                        // ... and that vertex is the reco PV
     float truthX = 0.f, truthY = 0.f, truthZ = 0.f; // [mm]
 
     // one entry per reconstructed vertex
@@ -531,11 +590,12 @@ private:
     std::vector<float> pvSigmaX, pvSigmaY, pvSigmaZ; // [um]
     std::vector<float> pvChi2Ndf;
     std::vector<float> pvNTracks;
-    std::vector<float> pvTrackFraction; // truth-linked tracks of the PV / nTracksEvent
+    std::vector<float> pvMatchFraction; // purity: matchFraction of the PV
+    std::vector<float> pvTrackFraction; // PV tracks from the truth PV / nTracksTruthPV
 
     void clear() {
-      nRecoVtx = nTrueVtx = nTracksEvent = truthPVFoundClean = 0;
-      truthX = truthY = truthZ = 0.f;
+      nRecoVtx = nTrueVtx = nTracksEvent = nTracksTruthPV = truthPVFoundClean = recoPVIsTruthPV = 0;
+      truthX = truthY = truthZ = truthPVSumPt2 = 0.f;
       for (auto* v : {&recoX,
                       &recoY,
                       &recoZ,
@@ -571,6 +631,7 @@ private:
                       &pvSigmaZ,
                       &pvChi2Ndf,
                       &pvNTracks,
+                      &pvMatchFraction,
                       &pvTrackFraction}) {
         v->clear();
       }
@@ -584,7 +645,10 @@ private:
     t.tree->Branch("nRecoVtx", &t.nRecoVtx);
     t.tree->Branch("nTrueVtx", &t.nTrueVtx);
     t.tree->Branch("nTracksEvent", &t.nTracksEvent);
+    t.tree->Branch("nTracksTruthPV", &t.nTracksTruthPV);
+    t.tree->Branch("truthPVSumPt2", &t.truthPVSumPt2);
     t.tree->Branch("truthPVFoundClean", &t.truthPVFoundClean);
+    t.tree->Branch("recoPVIsTruthPV", &t.recoPVIsTruthPV);
     t.tree->Branch("truthX", &t.truthX);
     t.tree->Branch("truthY", &t.truthY);
     t.tree->Branch("truthZ", &t.truthZ);
@@ -623,6 +687,7 @@ private:
     t.tree->Branch("pvSigmaZ", &t.pvSigmaZ);
     t.tree->Branch("pvChi2Ndf", &t.pvChi2Ndf);
     t.tree->Branch("pvNTracks", &t.pvNTracks);
+    t.tree->Branch("pvMatchFraction", &t.pvMatchFraction);
     t.tree->Branch("pvTrackFraction", &t.pvTrackFraction);
   }
 
@@ -680,6 +745,7 @@ private:
   mutable int m_evt = 0;
   mutable int m_nEventsWithRecoPV = 0;
   mutable int m_nEventsTruthPVClean = 0;
+  mutable int m_nEventsRecoPVIsTruthPV = 0;
   mutable int m_nPVBadCovariance = 0;
   mutable std::array<int, 4> m_classificationCounts{};
   mutable bool m_warnedNoTruth = false;
