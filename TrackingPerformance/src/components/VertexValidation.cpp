@@ -69,6 +69,7 @@
  *   - the truth vertex with the largest summed weight is the match, and
  *     matchFraction = its weight / total weight of the reconstructed vertex;
  *   - matchFraction >= VertexMatchThreshold is "clean", otherwise "merged";
+ *     a vertex without any truth-linked track is "unknown";
  *   - when two reconstructed vertices match the same truth vertex, the one with
  *     the smaller sum pT^2 is "split".
  *  Track weights are read from an optional vertex -> particle link collection
@@ -220,7 +221,9 @@ struct VertexValidation final
 
     // ---------- reconstructed vertices ----------
     // The reconstructed primary vertex is the one the producer flagged as
-    // primary; if none is flagged, the first one is taken.
+    // primary; if none is flagged, the first one is taken for the PV plots.
+    // Only a flagged vertex counts for the PV selection efficiency.
+    int flaggedPVIndex = -1;
     int pvIndex = -1;
     m_tree.nRecoVtx = static_cast<int>(vertices.size());
 
@@ -287,7 +290,8 @@ struct VertexValidation final
         }
       }
       const double matchFraction = totalWeight > 0. ? majorityWeight / totalWeight : 0.;
-      int classification = matchFraction >= m_vertexMatchThreshold ? Clean : Merged;
+      // Without any truth-linked track there is no truth vertex to match
+      int classification = matchedTruth < 0 ? Unknown : matchFraction >= m_vertexMatchThreshold ? Clean : Merged;
 
       if (matchedTruth >= 0) {
         auto it = truthToReco.find(matchedTruth);
@@ -332,13 +336,11 @@ struct VertexValidation final
       m_tree.covPosDef.push_back(positiveDefinite(cov) ? 1.f : 0.f);
       tracksFromTruthPV.push_back(nFromTruthPV);
 
-      if (vtx.isPrimary() && pvIndex < 0) {
-        pvIndex = static_cast<int>(i);
+      if (vtx.isPrimary() && flaggedPVIndex < 0) {
+        flaggedPVIndex = static_cast<int>(i);
       }
     }
-    if (pvIndex < 0 && !vertices.empty()) {
-      pvIndex = 0;
-    }
+    pvIndex = flaggedPVIndex >= 0 ? flaggedPVIndex : (vertices.empty() ? -1 : 0);
 
     for (const float c : m_tree.classification) {
       ++m_classificationCounts[static_cast<std::size_t>(c)];
@@ -350,8 +352,8 @@ struct VertexValidation final
         it != truthToReco.end() && static_cast<int>(m_tree.classification[it->second.first]) == Clean) {
       m_tree.truthPVFoundClean = 1;
       ++m_nEventsTruthPVClean;
-      // ...and the producer picked that vertex as the primary one
-      if (static_cast<int>(it->second.first) == pvIndex) {
+      // ...and the producer flagged that vertex as the primary one
+      if (static_cast<int>(it->second.first) == flaggedPVIndex) {
         m_tree.recoPVIsTruthPV = 1;
         ++m_nEventsRecoPVIsTruthPV;
       }
@@ -395,7 +397,8 @@ struct VertexValidation final
            << " with the truth primary vertex matched by a clean vertex, " << m_nEventsRecoPVIsTruthPV
            << " of them with that vertex flagged as primary" << endmsg;
     info() << "Reconstructed vertices: " << m_classificationCounts[Clean] << " clean, "
-           << m_classificationCounts[Merged] << " merged, " << m_classificationCounts[Split] << " split" << endmsg;
+           << m_classificationCounts[Merged] << " merged, " << m_classificationCounts[Split] << " split, "
+           << m_classificationCounts[Unknown] << " without truth match" << endmsg;
     if (m_nPVBadCovariance > 0) {
       warning() << m_nPVBadCovariance << " primary vertices have a covariance that is not positive definite; "
                 << "their pulls are meaningless" << endmsg;
@@ -518,7 +521,8 @@ struct VertexValidation final
     int nEvents = m_evt, nRecoPV = m_nEventsWithRecoPV, nTruthPVClean = m_nEventsTruthPVClean;
     int nRecoPVIsTruthPV = m_nEventsRecoPVIsTruthPV;
     int nClean = m_classificationCounts[Clean], nMerged = m_classificationCounts[Merged];
-    int nSplit = m_classificationCounts[Split], nPVBadCov = m_nPVBadCovariance;
+    int nSplit = m_classificationCounts[Split], nUnknown = m_classificationCounts[Unknown];
+    int nPVBadCov = m_nPVBadCovariance;
     float pvEfficiency = nEvents > 0 ? static_cast<float>(nTruthPVClean) / nEvents : 0.f;
     float pvSelectionEfficiency = nEvents > 0 ? static_cast<float>(nRecoPVIsTruthPV) / nEvents : 0.f;
     summary->Branch("nEvents", &nEvents);
@@ -530,6 +534,7 @@ struct VertexValidation final
     summary->Branch("nClean", &nClean);
     summary->Branch("nMerged", &nMerged);
     summary->Branch("nSplit", &nSplit);
+    summary->Branch("nUnknown", &nUnknown);
     summary->Branch("nPVNotPositiveDefinite", &nPVBadCov);
     for (std::size_t k = 0; k < axes.size(); ++k) {
       const std::string axis = axes[k];
@@ -565,7 +570,7 @@ private:
     int nTracksTruthPV = 0;                         // of them, tracks whose MC particle comes from the truth PV
     float truthPVSumPt2 = 0.f;                      // sum of their MC particles' pT^2 [GeV^2]
     int truthPVFoundClean = 0;                      // truth PV matched by a clean reco vertex
-    int recoPVIsTruthPV = 0;                        // ... and that vertex is the reco PV
+    int recoPVIsTruthPV = 0;                        // ... and that vertex is flagged as primary
     float truthX = 0.f, truthY = 0.f, truthZ = 0.f; // [mm]
 
     // one entry per reconstructed vertex
