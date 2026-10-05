@@ -27,9 +27,9 @@ import sys
 
 import ROOT
 
-UNKNOWN, CLEAN, MERGED, SPLIT = 0, 1, 2, 3
-
 # Per event: values of the scalar branches and of the per-vertex branches.
+# The classification is compared by name, translated with the bin labels of
+# h_vertex_classification, so the codes are defined only in VertexValidation.
 # "weighted" uses the vertex -> particle links, "unweighted" counts every track
 # with weight 1, which turns the truth PV vertex of event 0 from clean (4/4.5)
 # into merged (4/6).
@@ -42,7 +42,7 @@ EXPECTED = {
             "nTracksTruthPV": 4,
             "truthPVFoundClean": 1,
             "recoPVIsTruthPV": 1,
-            "classification": [CLEAN, CLEAN, UNKNOWN],
+            "classification": ["clean", "clean", "unknown"],
             "matchedTruthIndex": [0, 1, -1],
             "matchFraction": [4 / 4.5, 1, 0],
             "nTracks": [5, 2, 1],
@@ -60,7 +60,7 @@ EXPECTED = {
             # nothing flagged primary: vertex 0 is plotted as the PV but does
             # not count as selected
             "recoPVIsTruthPV": 0,
-            "classification": [CLEAN, SPLIT, MERGED],
+            "classification": ["clean", "split", "merged"],
             "matchedTruthIndex": [0, 0, 1],
             "matchFraction": [1, 1, 2 / 3],
             "pvResZ": [4],
@@ -70,7 +70,7 @@ EXPECTED = {
             "nRecoVtx": 2,
             "truthPVFoundClean": 1,
             "recoPVIsTruthPV": 1,
-            "classification": [SPLIT, CLEAN],
+            "classification": ["split", "clean"],
             "matchedTruthIndex": [0, 0],
             "pvResX": [-1],
             "pvResY": [1],
@@ -82,19 +82,19 @@ EXPECTED = {
         {
             "truthPVFoundClean": 0,
             "recoPVIsTruthPV": 0,
-            "classification": [MERGED, CLEAN, UNKNOWN],
+            "classification": ["merged", "clean", "unknown"],
             "matchFraction": [4 / 6, 1, 0],
             "nTracks": [6, 2, 1],
         },
         {
             "truthPVFoundClean": 1,
             "recoPVIsTruthPV": 0,
-            "classification": [CLEAN, SPLIT, MERGED],
+            "classification": ["clean", "split", "merged"],
         },
         {
             "truthPVFoundClean": 1,
             "recoPVIsTruthPV": 1,
-            "classification": [SPLIT, CLEAN],
+            "classification": ["split", "clean"],
         },
     ],
 }
@@ -128,6 +128,8 @@ TOLERANCE = 1e-3
 
 
 def same(value, expected):
+    if isinstance(expected, str):
+        return value == expected
     return math.isclose(value, expected, rel_tol=TOLERANCE, abs_tol=TOLERANCE)
 
 
@@ -148,13 +150,19 @@ def main(fileName, mode):
         return 1
     failures = []
 
+    axis = f.Get("h_vertex_classification").GetXaxis()
+    classificationNames = [axis.GetBinLabel(b) for b in range(1, axis.GetNbins() + 1)]
+
     tree = f.Get("vertex_vs_mc")
     expected = EXPECTED[mode]
     check("entries", tree.GetEntries(), len(expected), failures)
     for i, values in enumerate(expected):
         tree.GetEntry(i)
         for branch, value in values.items():
-            check(f"event {i} {branch}", getattr(tree, branch), value, failures)
+            got = getattr(tree, branch)
+            if branch == "classification":
+                got = [classificationNames[int(c)] for c in got]
+            check(f"event {i} {branch}", got, value, failures)
 
     summary = f.Get("summary")
     summary.GetEntry(0)

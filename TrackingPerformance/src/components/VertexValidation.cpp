@@ -104,8 +104,10 @@ struct VertexValidation final
                               const std::vector<const edm4hep::VertexRecoParticleLinkCollection*>&)> {
 
   /// Reconstructed vertex classification, same values as ACTS'
-  /// RecoVertexClassification
+  /// RecoVertexClassification. The output stores the value; the bin labels of
+  /// h_vertex_classification give its name.
   enum Classification { Unknown = 0, Clean = 1, Merged = 2, Split = 3 };
+  static constexpr std::array<const char*, 4> kClassificationNames{"unknown", "clean", "merged", "split"};
 
   VertexValidation(const std::string& name, ISvcLocator* svcLoc)
       : Consumer(name, svcLoc,
@@ -488,9 +490,8 @@ struct VertexValidation final
                    "matched track weight / total track weight", 44, 0.0, 1.1);
     if (TH1F* h = writeHistogram("classification", "h_vertex_classification",
                                  "Classification of reconstructed vertices", "", 4, -0.5, 3.5)) {
-      const std::array<const char*, 4> labels{"unknown", "clean", "merged", "split"};
       for (int bin = 1; bin <= 4; ++bin) {
-        h->GetXaxis()->SetBinLabel(bin, labels[bin - 1]);
+        h->GetXaxis()->SetBinLabel(bin, kClassificationNames[bin - 1]);
       }
       h->Write("", TObject::kOverwrite);
     }
