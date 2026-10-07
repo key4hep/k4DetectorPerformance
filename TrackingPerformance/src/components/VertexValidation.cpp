@@ -137,19 +137,20 @@ struct VertexValidation final
     m_tree.event = m_evt++;
 
     // ---------- truth primary vertex ----------
-    // The truth primary vertex is the production vertex of the particles
-    // without parents (the generator's initial state, or the particles of a
-    // particle gun). Vertex smearing in the simulation shifts all of them
-    // together, so they share one position; distinct positions would mean
-    // more than one collision in the event.
+    // The truth primary vertex is where the particles without parents (the
+    // generator's initial state, or the particles of a particle gun) start the
+    // event: see collisionPosition. Vertex smearing in the simulation shifts
+    // all of them together, so they share one position; distinct positions
+    // would mean more than one collision in the event.
     std::vector<edm4hep::Vector3d> truthVertices; // index 0 is the truth primary vertex
     for (const auto& mc : mcParts) {
       if (!mc.getParents().empty()) {
         continue;
       }
+      const edm4hep::Vector3d collision = collisionPosition(mc);
       if (truthVertices.empty()) {
-        truthVertices.push_back(mc.getVertex());
-      } else if (!samePosition(mc.getVertex(), truthVertices.front())) {
+        truthVertices.push_back(collision);
+      } else if (!samePosition(collision, truthVertices.front())) {
         // A second primary position means a second collision (pile-up or
         // overlay). Everything is compared with the first one, so record that
         // the event is ambiguous rather than mixing silently.
@@ -708,6 +709,26 @@ private:
     const double minor2 = xx * yy - xy * xy;
     const double minor3 = xx * (yy * zz - yz * yz) - xy * (xy * zz - yz * xz) + xz * (xy * yz - yy * xz);
     return std::isfinite(minor3) && xx > 0. && minor2 > 0. && minor3 > 0.;
+  }
+
+  /// Where a parentless MC particle starts the event. An incoming particle (a
+  /// beam or documentation entry: generator status neither stable, 1, nor
+  /// decayed, 2) is not simulated; it comes from the generator's root vertex,
+  /// e.g. (0,0,0) when the generator applies the beam spot, and the collision
+  /// is where its generator-level products start. Their production vertex is
+  /// used rather than its endpoint, which the simulation's crossing-angle boost
+  /// leaves unchanged. Any other parentless particle (e.g. of a particle gun)
+  /// starts the event itself.
+  static edm4hep::Vector3d collisionPosition(const edm4hep::MCParticle& mc) {
+    const int status = mc.getGeneratorStatus();
+    if (status != 1 && status != 2) {
+      for (const auto& daughter : mc.getDaughters()) {
+        if (!daughter.isCreatedInSimulation()) {
+          return daughter.getVertex();
+        }
+      }
+    }
+    return mc.getVertex();
   }
 
   bool samePosition(const edm4hep::Vector3d& a, const edm4hep::Vector3d& b) const {
