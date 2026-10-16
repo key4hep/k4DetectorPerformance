@@ -757,7 +757,7 @@ private:
                                             "Output ROOT file (tree and plots)"};
   Gaudi::Property<float> m_residualRange{this, "ResidualRange", 10.f, "Half-range of the PV residual histograms [um]"};
   Gaudi::Property<double> m_samePositionTolerance{
-      this, "TruthVertexTolerance", 1e-6,
+      this, "TruthVertexTolerance", 1e-3,
       "MC production points closer than this are taken to be the same truth vertex [mm]"};
   Gaudi::Property<float> m_minTrackWeight{this, "MinTrackWeight", 0.1f,
                                           "Minimum track weight for a track to count as part of a vertex "
