@@ -894,11 +894,11 @@ private:
       reco.pT = TrackingValidationHelpers::ptFromState(*stReco, m_Bz.value());
       reco.p = TrackingValidationHelpers::momentumFromState(*stReco, m_Bz.value());
 
-      // Truth reference on the configured perigee, using the production direction.
+      // Truth reference on the configured perigee, from the helix of the production state.
       const TrackingValidationHelpers::HelixParams refMC = TrackingValidationHelpers::truthPerigeeFromMC(
           mc, m_Bz.value(), m_refX.value(), m_refY.value(), m_refZ.value());
 
-      // Production vertex, to select particles for which the straight-line truth is exact
+      // Production vertex, to select prompt or displaced particles
       const auto& vtx = mc.getVertex();
       const float vertexR = float(std::hypot(vtx.x, vtx.y));
       const float vertexZ = float(vtx.z);

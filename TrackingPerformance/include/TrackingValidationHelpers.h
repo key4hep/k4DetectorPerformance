@@ -53,17 +53,21 @@ struct PCAInfoHelper {
 /// Wrap a phi difference into the interval [-pi, pi]
 double wrapDeltaPhi(double a, double b);
 
-/// Straight-line closest approach of the production direction to the beamline
-/// through (refX, refY), in mm
-PCAInfoHelper PCAInfo_mm(double x, double y, double z, double px, double py, double pz, double refX, double refY);
+/// Closest approach to the beamline through (refX, refY) of the helix through (x, y, z) with
+/// momentum (px, py, pz) and charge in the uniform field Bz [T], in mm, and its direction there.
+/// A straight line for neutral particles or Bz = 0.
+PCAInfoHelper PCAInfo_mm(double x, double y, double z, double px, double py, double pz, double charge, double refX,
+                         double refY, double Bz);
 
 /**
  * @brief Truth helix parameters of an MC particle on the perigee at (refX, refY, refZ).
  *
- * As in ACTS (ResPlotTool::fill, RootTrackSummaryWriter; acts-project/acts @ ce4824f9),
- * d0 and z0 come from the straight line along the production direction, and phi and
- * tanLambda from the production momentum. Exact for particles produced on the beamline;
- * for displaced particles the neglected curvature biases d0 by ~L^2/2R and phi by ~L/R.
+ * d0, z0 and phi are taken at the closest approach to the beamline of the helix through the
+ * production vertex with the production momentum, as for the fitted track state, so they are
+ * exact for displaced particles too (in a uniform field, without energy loss). ACTS (ResPlotTool,
+ * RootTrackSummaryWriter; acts-project/acts @ ce4824f9) uses the straight line along the
+ * production direction instead, which biases d0 by ~L^2/2R for a particle produced at L from
+ * the beamline.
  */
 HelixParams truthPerigeeFromMC(const edm4hep::MCParticle& mc, double Bz, double refX, double refY, double refZ);
 

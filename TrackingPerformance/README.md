@@ -111,13 +111,13 @@ where σ is taken from the corresponding diagonal element of the fitted track co
 
 ### Truth reference parameters
 
-The truth parameters in `fitter_vs_mc` are defined on the perigee at (`RefPointX`, `RefPointY`, `RefPointZ`), as in ACTS (`ResPlotTool`, `RootTrackSummaryWriter`):
+The truth parameters in `fitter_vs_mc` are defined on the perigee at (`RefPointX`, `RefPointY`, `RefPointZ`), like the fitted track state:
 
-- `d0` and `z0` are taken at the closest approach to the beamline of the straight line along the particle's production direction;
-- `phi` and `tanLambda` come from the production momentum;
+- `d0`, `z0` and `phi` are taken at the closest approach to the beamline of the helix through the particle's production vertex, with its production momentum and charge, in the uniform field `Bz`;
+- `tanLambda` comes from the production momentum;
 - `omega` is computed from the particle's charge, `pT` and `Bz`.
 
-This is exact for particles produced on the beamline. For a particle produced at a distance L from it, the neglected curvature (radius R) biases `d0` by about L²/2R and `phi` by about L/R. The fitter trees store the production vertex (`vertexR`, `vertexZ`) of the matched particle so that such particles can be excluded.
+This is exact for displaced particles too, up to energy loss and multiple scattering before the first measurement. ACTS (`ResPlotTool`, `RootTrackSummaryWriter`) uses the straight line along the production direction instead, which for a particle produced at a distance L from the beamline biases `d0` by about L²/2R (R the helix radius). The fitter trees store the production vertex (`vertexR`, `vertexZ`) of the matched particle, to select prompt or displaced particles.
 
 Additional plots may be added in future developments.
 ---
