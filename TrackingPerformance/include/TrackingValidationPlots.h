@@ -21,6 +21,7 @@
 #define TRACKINGVALIDATIONPLOTS_H
 
 #include "TCanvas.h"
+#include "TGraphAsymmErrors.h"
 #include "TGraphErrors.h"
 #include "TH1F.h"
 #include "TTree.h"
@@ -116,14 +117,14 @@ TCanvas* drawResolutionCanvas(TGraphErrors* g, const char* canvasName, const cha
  *
  * The function reads the finder validation tree and computes the efficiency
  * according to the selected matching definition, returning the result as a
- * TGraphErrors.
+ * TGraphAsymmErrors with exact binomial confidence intervals.
  */
-TGraphErrors* makeEfficiencyVsMomentum(TTree* finderTree, const char* graphName, int efficiencyDefinition,
-                                       double purityThreshold, double pMin = 0.1, double pMax = 100.0,
-                                       double logStep = 0.15);
+TGraphAsymmErrors* makeEfficiencyVsMomentum(TTree* finderTree, const char* graphName, int efficiencyDefinition,
+                                            double purityThreshold, double pMin = 0.1, double pMax = 100.0,
+                                            double logStep = 0.15);
 
 /// Draw the tracking-efficiency graph on a logarithmic momentum axis
-TCanvas* drawEfficiencyCanvas(TGraphErrors* g, const char* canvasName, const char* title, double xMin = 0.1,
+TCanvas* drawEfficiencyCanvas(TGraphAsymmErrors* g, const char* canvasName, const char* title, double xMin = 0.1,
                               double xMax = 100.0);
 
 } // namespace TrackingValidationPlots
