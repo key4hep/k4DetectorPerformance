@@ -97,6 +97,11 @@ set_target_properties(${PackageName} PROPERTIES
 #   manual/example script
 #   runs the full IDEA pipeline
 #   intentionally not registered as a CI test
+#
+# testVertexValidation.sh:
+#   lightweight CI test
+#   runs VertexValidation on a small hand-made EDM4hep file and checks its
+#   output against the expected values
 # ---------------------------------------------------------------------------
 
 file(GLOB test_python_scripts
@@ -106,6 +111,7 @@ file(GLOB test_python_scripts
 set(test_shell_scripts
   ${PROJECT_SOURCE_DIR}/test/testTrackingValidation.sh
   ${PROJECT_SOURCE_DIR}/test/testTrackingValidationFullReco.sh
+  ${PROJECT_SOURCE_DIR}/test/testVertexValidation.sh
 )
 
 set(test_scripts
@@ -147,3 +153,19 @@ set_tests_properties(
 )
 
 ExternalData_Add_Target(k4DetectorPerformanceData)
+
+set(test_name "testVertexValidation")
+
+add_test(
+  NAME ${test_name}
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/testVertexValidation.sh
+)
+
+set_test_env(${test_name})
+
+set_tests_properties(
+  ${test_name}
+  PROPERTIES
+    TIMEOUT 300
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
