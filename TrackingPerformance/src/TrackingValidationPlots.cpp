@@ -18,10 +18,12 @@
  */
 #include "TrackingValidationPlots.h"
 #include "TAxis.h"
+#include "TEfficiency.h"
 #include "TF1.h"
 #include "TH1F.h"
 #include "TPaveStats.h"
 #include "TStyle.h"
+#include "TrackingValidationHelpers.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -60,11 +62,14 @@ namespace {
 
 std::vector<double> makeLogBins(double min, double max, double step) {
   std::vector<double> bins;
-  for (double x = std::log10(min); x <= std::log10(max); x += step) {
-    bins.push_back(std::pow(10., x));
+  const double logMin = std::log10(min);
+  const double logMax = std::log10(max);
+  // Edges from an integer index with a tolerance: accumulating x += step drifts,
+  // and the last edge could land just below max, leaving a zero-width bin.
+  for (int i = 0; logMin + i * step < logMax - 1e-9 * step; ++i) {
+    bins.push_back(std::pow(10., logMin + i * step));
   }
-  if (bins.empty() || bins.back() < max)
-    bins.push_back(max);
+  bins.push_back(max);
   return bins;
 }
 
@@ -477,16 +482,16 @@ TCanvas* drawResolutionCanvas(TGraphErrors* g, const char* canvasName, const cha
   return c;
 }
 
-TGraphErrors* makeEfficiencyVsMomentum(TTree* finderTree, const char* graphName, int efficiencyDefinition,
-                                       double purityThreshold, double pMin, double pMax, double logStep) {
+TGraphAsymmErrors* makeEfficiencyVsMomentum(TTree* finderTree, const char* graphName, int efficiencyDefinition,
+                                            double purityThreshold, double pMin, double pMax, double logStep) {
   if (!finderTree)
     return nullptr;
 
   std::vector<double> bins = makeLogBins(pMin, pMax, logStep);
   const int nBins = bins.size() - 1;
 
-  std::vector<int> nDen(nBins, 0);
-  std::vector<int> nNum(nBins, 0);
+  TEfficiency eff(graphName, "", nBins, bins.data());
+  eff.SetDirectory(nullptr);
 
   std::vector<float>* pVec = nullptr;
   std::vector<std::vector<float>>* purVec = nullptr;
@@ -512,18 +517,6 @@ TGraphErrors* makeEfficiencyVsMomentum(TTree* finderTree, const char* graphName,
       if (!std::isfinite(p) || p < pMin || p >= pMax)
         continue;
 
-      int bin = -1;
-      for (int b = 0; b < nBins; ++b) {
-        if (p >= bins[b] && p < bins[b + 1]) {
-          bin = b;
-          break;
-        }
-      }
-      if (bin < 0)
-        continue;
-
-      nDen[bin]++;
-
       bool isMatched = false;
 
       const auto& purities = (*purVec)[i];
@@ -535,7 +528,8 @@ TGraphErrors* makeEfficiencyVsMomentum(TTree* finderTree, const char* graphName,
         const float efficiency = efficiencies[j];
 
         if (efficiencyDefinition == 2) {
-          if (purity >= 0.5f && efficiency >= 0.5f) {
+          if (purity >= TrackingValidationHelpers::doubleMatchingRatio &&
+              efficiency >= TrackingValidationHelpers::doubleMatchingRatio) {
             isMatched = true;
             break;
           }
@@ -547,33 +541,33 @@ TGraphErrors* makeEfficiencyVsMomentum(TTree* finderTree, const char* graphName,
         }
       }
 
-      if (isMatched)
-        nNum[bin]++;
+      eff.Fill(isMatched, p);
     }
   }
 
-  TGraphErrors* g = new TGraphErrors();
+  TGraphAsymmErrors* g = new TGraphAsymmErrors();
   g->SetName(graphName);
   g->SetTitle(";p [GeV];Tracking efficiency");
 
+  // TEfficiency::CreateGraph() would put the points at the arithmetic bin centre with x errors
+  // spanning the bin; use the geometric centre of the log-spaced bins and no x errors instead.
   int ip = 0;
-  for (int b = 0; b < nBins; ++b) {
-    if (nDen[b] == 0)
+  for (int b = 1; b <= nBins; ++b) {
+    if (eff.GetTotalHistogram()->GetBinContent(b) == 0)
       continue;
 
-    const double eff = double(nNum[b]) / double(nDen[b]);
-    const double err = std::sqrt(eff * (1.0 - eff) / double(nDen[b]));
-    const double pCenter = std::sqrt(bins[b] * bins[b + 1]);
+    const double pCenter = std::sqrt(bins[b - 1] * bins[b]);
 
-    g->SetPoint(ip, pCenter, eff);
-    g->SetPointError(ip, 0.0, err);
+    g->SetPoint(ip, pCenter, eff.GetEfficiency(b));
+    g->SetPointError(ip, 0.0, 0.0, eff.GetEfficiencyErrorLow(b), eff.GetEfficiencyErrorUp(b));
     ++ip;
   }
   finderTree->ResetBranchAddresses();
   return g;
 }
 
-TCanvas* drawEfficiencyCanvas(TGraphErrors* g, const char* canvasName, const char* title, double xMin, double xMax) {
+TCanvas* drawEfficiencyCanvas(TGraphAsymmErrors* g, const char* canvasName, const char* title, double xMin,
+                              double xMax) {
   if (!g)
     return nullptr;
 
