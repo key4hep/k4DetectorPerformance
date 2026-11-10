@@ -19,7 +19,7 @@ limitations under the License.
 
 set(PackageName TrackingPerformance)
 
-project(${PackageName})
+project(${PackageName} LANGUAGES CXX)
 
 # ---------------------------------------------------------------------------
 # External test data
