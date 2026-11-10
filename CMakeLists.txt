@@ -33,6 +33,9 @@ find_package(ROOT COMPONENTS RIO Tree)
 find_package(EDM4HEP)
 find_package(k4FWCore)
 find_package(Gaudi)
+find_package(DD4hep REQUIRED COMPONENTS DDRec)
+find_package(MarlinUtil REQUIRED)
+
 #---------------------------------------------------------------
 
 include(cmake/Key4hepConfig.cmake)
@@ -47,6 +50,7 @@ function(set_test_env _testname)
 endfunction()
 
 add_subdirectory(RecoMCTruthLinkers)
+add_subdirectory(dQdx)
 add_subdirectory(TrackingPerformance)
 
 include(cmake/CreateProjectConfig.cmake)
