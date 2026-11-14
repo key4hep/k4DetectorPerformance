@@ -21,15 +21,45 @@
 #define TRACKINGVALIDATIONHELPERS_H
 
 #include "edm4hep/MCParticle.h"
+#include "edm4hep/MCParticleCollection.h"
 #include "edm4hep/Track.h"
 #include "edm4hep/TrackState.h"
+#include "edm4hep/TrackerHitSimTrackerHitLinkCollection.h"
+#include "podio/ObjectID.h"
 #include <optional>
+#include <unordered_map>
+#include <vector>
 
 namespace TrackingValidationHelpers {
 
 /// Purity and completeness both required by FinderEfficiencyDefinition = 2
 /// (ACTS TrackTruthMatcher with doubleMatching and matchingRatio = 0.5)
 inline constexpr double doubleMatchingRatio = 0.5;
+
+/// Truth of the reconstructed tracker hits. A particle is the position of its
+/// MC particle in the MC particle collection; particles outside that
+/// collection get the following numbers.
+struct HitTruth {
+  std::unordered_map<podio::ObjectID, std::vector<int>> hitToParticle;   // all particles of a hit
+  std::unordered_map<int, std::vector<podio::ObjectID>> hitsPerParticle; // all hits of a particle
+};
+
+/// Build the hit truth from the digi-to-sim link collections
+HitTruth buildHitTruth(const edm4hep::MCParticleCollection& mcParts,
+                       const std::vector<const edm4hep::TrackerHitSimTrackerHitLinkCollection*>& linkCollections);
+
+/**
+ * @brief The particle a track is matched to, or -1.
+ *
+ * The candidate is the particle with most hits on the track. With doubleMatching
+ * (ACTS TrackTruthMatcher) the match needs purity (its hits / track hits) and
+ * completeness (its hits / all its hits) >= doubleMatchingRatio, otherwise
+ * purity >= purityThreshold.
+ */
+int majorityParticleForTrack(const edm4hep::Track& trk,
+                             const std::unordered_map<podio::ObjectID, std::vector<int>>& hitToParticle,
+                             const std::unordered_map<int, std::vector<podio::ObjectID>>& hitsPerParticle,
+                             bool doubleMatching, double purityThreshold);
 
 /// EDM4hep helix parameters; geometry is evaluated in double precision
 struct HelixParams {
