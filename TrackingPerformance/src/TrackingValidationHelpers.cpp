@@ -19,6 +19,7 @@
 
 #include "TrackingValidationHelpers.h"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
@@ -111,6 +112,83 @@ double ptFromState(const edm4hep::TrackState& st, double Bz) {
 
 double momentumFromState(const edm4hep::TrackState& st, double Bz) {
   return ptFromState(st, Bz) * std::hypot(1., st.tanLambda);
+}
+
+HitTruth buildHitTruth(const edm4hep::MCParticleCollection& mcParts,
+                       const std::vector<const edm4hep::TrackerHitSimTrackerHitLinkCollection*>& linkCollections) {
+  HitTruth truth;
+  truth.hitsPerParticle.reserve(mcParts.size());
+  truth.hitToParticle.reserve(200000);
+
+  // ObjectID indices need not be positions in a selected/subset MC collection.
+  // Assign distinct local IDs to outside contributors too, so they cannot
+  // alias selected particles or turn a selected minority into the majority.
+  std::unordered_map<podio::ObjectID, int> particleIndices;
+  int nextParticle = 0;
+  for (const auto& mc : mcParts)
+    particleIndices.emplace(mc.getObjectID(), nextParticle++);
+
+  // digi-to-sim links
+  for (const auto* links : linkCollections) {
+    if (!links)
+      continue;
+    for (const auto& link : *links) {
+      const auto digi = link.getFrom();
+      const auto sim = link.getTo();
+      if (!digi.isAvailable() || !sim.isAvailable())
+        continue;
+      const auto mc = sim.getParticle();
+      if (!mc.isAvailable())
+        continue;
+
+      const auto [particle, inserted] = particleIndices.emplace(mc.getObjectID(), nextParticle);
+      if (inserted)
+        ++nextParticle;
+      const int pid = particle->second;
+      const auto key = digi.getObjectID();
+      auto& contributors = truth.hitToParticle[key];
+      // Preserve every contributor, counting each particle once per reco hit.
+      if (std::find(contributors.begin(), contributors.end(), pid) == contributors.end()) {
+        contributors.push_back(pid);
+        truth.hitsPerParticle[pid].push_back(key);
+      }
+    }
+  }
+  return truth;
+}
+
+int majorityParticleForTrack(const edm4hep::Track& trk,
+                             const std::unordered_map<podio::ObjectID, std::vector<int>>& hitToParticle,
+                             const std::unordered_map<int, std::vector<podio::ObjectID>>& hitsPerParticle,
+                             bool doubleMatching, double purityThreshold) {
+  std::unordered_map<int, int> counts;
+  for (const auto& h : trk.getTrackerHits()) {
+    const auto hk = h.getObjectID();
+    auto it = hitToParticle.find(hk);
+    if (it == hitToParticle.end())
+      continue;
+    for (int pid : it->second)
+      counts[pid] += 1;
+  }
+  if (counts.empty())
+    return -1;
+
+  int bestP = -1;
+  int bestN = -1;
+  for (const auto& kv : counts) {
+    if (kv.second > bestN || (kv.second == bestN && kv.first < bestP)) {
+      bestN = kv.second;
+      bestP = kv.first;
+    }
+  }
+  const double purity = double(bestN) / trk.getTrackerHits().size();
+  const auto truthHits = hitsPerParticle.find(bestP);
+  if (truthHits == hitsPerParticle.end() || truthHits->second.empty())
+    return -1;
+  const double completeness = double(bestN) / truthHits->second.size();
+  const bool matched =
+      doubleMatching ? purity >= doubleMatchingRatio && completeness >= doubleMatchingRatio : purity >= purityThreshold;
+  return matched ? bestP : -1;
 }
 
 } // namespace TrackingValidationHelpers
