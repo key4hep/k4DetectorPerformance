@@ -24,7 +24,8 @@
 #   event 0: vertex 0 flagged primary, 4 truth-PV tracks with weight 1, one
 #            secondary track with weight 0.5 and one with 0.05 (below
 #            MinTrackWeight); vertex 1 matches a secondary truth vertex;
-#            vertex 2 has only a track without truth link
+#            vertex 2 has only a fake track (its 4 hits come from 4
+#            different MC particles)
 #   event 1: nothing flagged primary; vertex 0 is the clean truth-PV match,
 #            vertex 1 (softer) splits from it, vertex 2 is merged
 #   event 2: vertex 0 (soft) matches the truth PV first, vertex 1 (harder,
@@ -41,8 +42,10 @@ X, Y, Z = edm4hep.Cartesian.x, edm4hep.Cartesian.y, edm4hep.Cartesian.z
 class Event:
     def __init__(self):
         self.mcs = edm4hep.MCParticleCollection()
+        self.simHits = edm4hep.SimTrackerHitCollection()
+        self.hits = edm4hep.TrackerHitPlaneCollection()
+        self.hitLinks = edm4hep.TrackerHitSimTrackerHitLinkCollection()
         self.tracks = edm4hep.TrackCollection()
-        self.mcLinks = edm4hep.TrackMCParticleLinkCollection()
         self.particles = edm4hep.ReconstructedParticleCollection()
         self.vertices = edm4hep.VertexCollection()
         self.vertexLinks = edm4hep.VertexRecoParticleLinkCollection()
@@ -55,14 +58,22 @@ class Event:
             mc.addToParents(parent)
         return mc
 
+    def hit(self, mc):
+        """Tracker hit made by mc, with its digi-to-sim link"""
+        simHit = self.simHits.create()
+        simHit.setParticle(mc)
+        hit = edm4hep.TrackerHit(self.hits.create())
+        link = self.hitLinks.create()
+        link.setFrom(hit)
+        link.setTo(simHit)
+        return hit
+
     def particle(self, mc, pt):
-        """Reconstructed particle with one track, truth-linked to mc unless None"""
+        """Reconstructed particle with one track: 4 hits made by mc, or, given a
+        list of MC particles, one hit made by each"""
         track = self.tracks.create()
-        if mc is not None:
-            link = self.mcLinks.create()
-            link.setFrom(track)
-            link.setTo(mc)
-            link.setWeight(1.0)
+        for hitMC in mc if isinstance(mc, list) else [mc] * 4:
+            track.addToTrackerHits(self.hit(hitMC))
         particle = self.particles.create()
         particle.setMomentum(edm4hep.Vector3f(pt, 0.0, 1.0))
         particle.addToTracks(track)
@@ -87,8 +98,10 @@ class Event:
     def write(self, writer):
         frame = Frame()
         frame.put(self.mcs, "MCParticles")
+        frame.put(self.simHits, "SimTrackerHits")
+        frame.put(self.hits, "TrackerHits")
+        frame.put(self.hitLinks, "TrackerHitLinks")
         frame.put(self.tracks, "Tracks")
-        frame.put(self.mcLinks, "SiTracksMCTruthLink")
         frame.put(self.particles, "ReconstructedParticles")
         frame.put(self.vertices, "PrimaryVertices")
         frame.put(self.vertexLinks, "PrimaryVertices_ParticleLinks")
@@ -103,7 +116,8 @@ def event0(writer):
     svMCs = [ev.mc(sv, 1.0, parent=pvMCs[0]) for _ in range(4)]
     pvParts = [ev.particle(mc, 2.0) for mc in pvMCs]
     svParts = [ev.particle(mc, 1.0) for mc in svMCs]
-    unlinked = ev.particle(None, 1.0)
+    # purity 1/4: matched to no particle
+    fake = ev.particle(pvMCs, 1.0)
     # residual (2, 0, 3) um with sigma 2 um
     ev.vertex(
         (0.012, -0.020, 0.503),
@@ -112,7 +126,7 @@ def event0(writer):
         primary=True,
     )
     ev.vertex((1.001, 0.5, 2.0), 0.01, [(svParts[2], 1.0), (svParts[3], 1.0)])
-    ev.vertex((0.5, 0.5, 0.5), 0.01, [(unlinked, 1.0)])
+    ev.vertex((0.5, 0.5, 0.5), 0.01, [(fake, 1.0)])
     ev.write(writer)
 
 

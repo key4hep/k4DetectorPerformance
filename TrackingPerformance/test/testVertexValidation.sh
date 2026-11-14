@@ -49,6 +49,8 @@ for mode in weighted unweighted; do
   k4run "${SCRIPT_DIR}/runVertexValidation.py" \
     --inputFile "${INPUT_FILE}" \
     --vertices PrimaryVertices \
+    --tracks Tracks \
+    --hitSimLinks TrackerHitLinks \
     "${LINK_ARGS[@]}" \
     --validationFile "${VALIDATION_FILE}"
 

@@ -17,6 +17,7 @@
  * limitations under the License.
  */
 
+#include "TrackingValidationHelpers.h"
 #include "TrackingValidationPlots.h"
 
 // k4FWCore
@@ -28,7 +29,8 @@
 
 // EDM4hep
 #include "edm4hep/MCParticleCollection.h"
-#include "edm4hep/TrackMCParticleLinkCollection.h"
+#include "edm4hep/TrackCollection.h"
+#include "edm4hep/TrackerHitSimTrackerHitLinkCollection.h"
 #include "edm4hep/VertexCollection.h"
 #include "edm4hep/VertexRecoParticleLinkCollection.h"
 
@@ -60,16 +62,22 @@
  *  producer (e.g. the ACTS adaptive multi-vertex finder or LCFIPlus) with the
  *  same definitions for all of them.
  *
- *  Truth matching follows ACTS' VertexTruthMatcher
- *  (Examples/Algorithms/TruthTracking/ActsExamples/TruthTracking/VertexTruthMatcher.cpp,
+ *  Truth matching follows ACTS' TrackTruthMatcher and VertexTruthMatcher
+ *  (Examples/Algorithms/TruthTracking/ActsExamples/TruthTracking/,
  *  acts-project/acts @ 9d258af1):
+ *   - a track's MC particle is the one with most hits on it, if it has at
+ *     least half of the track's hits (matchingRatio 0.5), found from the
+ *     digi-to-sim hit links as in TrackingValidation; otherwise the track has
+ *     none (a fake). With DoubleMatching the track must also hold at least
+ *     half of the particle's hits, as in ACTS' vertexing chain; that also
+ *     drops loopers, whose particle leaves hits on several turns;
  *   - every track of a reconstructed vertex with weight >= MinTrackWeight
  *     contributes its weight to the truth vertex its MC particle was produced
- *     at (vertex -> particles -> tracks -> track-MC link -> MC particle);
+ *     at (vertex -> particles -> tracks -> MC particle);
  *   - the truth vertex with the largest summed weight is the match, and
  *     matchFraction = its weight / total weight of the reconstructed vertex;
  *   - matchFraction >= VertexMatchThreshold is "clean", otherwise "merged";
- *     a vertex without any truth-linked track is "unknown";
+ *     a vertex without any truth-matched track is "unknown";
  *   - when two reconstructed vertices match the same truth vertex, the one with
  *     the smaller sum pT^2 is "split".
  *  Track weights are read from an optional vertex -> particle link collection
@@ -84,14 +92,16 @@
  *  Besides finding the truth primary vertex, a producer has to pick it as the
  *  primary one: the PV selection efficiency counts the events where the vertex
  *  it flags as primary is the clean match of the truth primary vertex. The
- *  tracks of the truth primary vertex (those whose MC particle was produced
- *  there) give truth-side quantities, their number and sum pT^2, that are the
- *  same for every producer run on the same tracks.
+ *  tracks of the truth primary vertex (those of the input track collection
+ *  whose MC particle was produced there) give truth-side quantities, their
+ *  number and sum pT^2, that are the same for every producer run on the same
+ *  tracks.
  *
  *  input:
  *    - MC particle collection         : edm4hep::MCParticleCollection
  *    - vertex collection              : edm4hep::VertexCollection
- *    - track -> MC particle links     : edm4hep::TrackMCParticleLinkCollection
+ *    - the tracks given to the vertexer : edm4hep::TrackCollection
+ *    - digi-to-sim link collections   : edm4hep::TrackerHitSimTrackerHitLinkCollection
  *    - optional vertex -> particle links with track weights
  *
  *  output:
@@ -100,7 +110,8 @@
  */
 struct VertexValidation final
     : k4FWCore::Consumer<void(const edm4hep::MCParticleCollection&, const edm4hep::VertexCollection&,
-                              const edm4hep::TrackMCParticleLinkCollection&,
+                              const edm4hep::TrackCollection&,
+                              const std::vector<const edm4hep::TrackerHitSimTrackerHitLinkCollection*>&,
                               const std::vector<const edm4hep::VertexRecoParticleLinkCollection*>&)> {
 
   /// Reconstructed vertex classification, same values as ACTS'
@@ -114,11 +125,17 @@ struct VertexValidation final
                  {
                      KeyValues("MCParticles", {"MCParticles"}),
                      KeyValues("Vertices", {"PrimaryVertices"}),
-                     KeyValues("TrackMCLinks", {"SiTracksMCTruthLink"}),
+                     KeyValues("Tracks", {"Tracks"}),
+                     KeyValues("HitSimLinks", {}),
                      KeyValues("VertexParticleLinks", {}),
                  }) {}
 
   StatusCode initialize() override {
+    // Detector specific, so no default: without them no track could be matched
+    if (inputLocations("HitSimLinks").empty()) {
+      error() << "HitSimLinks is empty: give the tracker hit -> sim hit link collections" << endmsg;
+      return StatusCode::FAILURE;
+    }
     m_outFile = std::make_unique<TFile>(m_outputFile.value().c_str(), "RECREATE");
     if (!m_outFile || m_outFile->IsZombie()) {
       error() << "Cannot open output file: " << m_outputFile.value() << endmsg;
@@ -131,7 +148,8 @@ struct VertexValidation final
 
   void
   operator()(const edm4hep::MCParticleCollection& mcParts, const edm4hep::VertexCollection& vertices,
-             const edm4hep::TrackMCParticleLinkCollection& trackMCLinks,
+             const edm4hep::TrackCollection& tracks,
+             const std::vector<const edm4hep::TrackerHitSimTrackerHitLinkCollection*>& hitSimLinks,
              const std::vector<const edm4hep::VertexRecoParticleLinkCollection*>& vertexParticleLinks) const override {
     m_tree.clear();
     m_tree.event = m_evt++;
@@ -187,27 +205,39 @@ struct VertexValidation final
     };
 
     // ---------- track -> MC particle ----------
-    // A track can be linked to several MC particles (shared hits); keep the one
-    // with the largest link weight.
-    std::map<ObjectKey, std::pair<float, std::optional<edm4hep::MCParticle>>> trackTruth;
-    for (const auto& link : trackMCLinks) {
-      auto& best = trackTruth[key(link.getFrom())];
-      if (!best.second.has_value() || link.getWeight() > best.first) {
-        best = {link.getWeight(), link.getTo()};
+    // From the hits, as ACTS' TrackTruthMatcher (see the class documentation).
+    // A track is matched when first needed, so the tracks of a vertex need not
+    // be in the input track collection.
+    const auto hitTruth = TrackingValidationHelpers::buildHitTruth(mcParts, hitSimLinks);
+    std::map<ObjectKey, std::optional<edm4hep::MCParticle>> trackTruth;
+    auto truthParticle = [&](const edm4hep::Track& track) -> const std::optional<edm4hep::MCParticle>& {
+      const auto [it, inserted] = trackTruth.try_emplace(key(track));
+      if (inserted) {
+        const int pid = TrackingValidationHelpers::majorityParticleForTrack(
+            track, hitTruth.hitToParticle, hitTruth.hitsPerParticle, m_doubleMatching,
+            TrackingValidationHelpers::doubleMatchingRatio);
+        // particles outside the MC particle collection are numbered after it
+        if (pid >= 0 && pid < static_cast<int>(mcParts.size())) {
+          it->second = mcParts[pid];
+        }
       }
-    }
-    m_tree.nTracksEvent = static_cast<int>(trackTruth.size());
+      return it->second;
+    };
 
     // Tracks of the truth primary vertex. Performance plotted against their
     // number or sum pT^2 puts the same events in a bin for every producer, as
     // opposed to the producer's own track count. A duplicated track counts
     // twice, as the vertexer sees it twice.
     double truthPVSumPt2 = 0.;
-    for (const auto& entry : trackTruth) {
-      const edm4hep::MCParticle& mc = *entry.second.second;
-      if (samePosition(mc.getVertex(), truthPV)) {
+    for (const auto& track : tracks) {
+      const auto& mc = truthParticle(track);
+      if (!mc) {
+        continue;
+      }
+      ++m_tree.nTracksEvent;
+      if (samePosition(mc->getVertex(), truthPV)) {
         ++m_tree.nTracksTruthPV;
-        const auto& p = mc.getMomentum();
+        const auto& p = mc->getMomentum();
         truthPVSumPt2 += p.x * p.x + p.y * p.y;
       }
     }
@@ -271,9 +301,8 @@ struct VertexValidation final
         sumPt2 += p.x * p.x + p.y * p.y;
 
         for (const auto& track : particle.getTracks()) {
-          const auto it = trackTruth.find(key(track));
-          if (it != trackTruth.end()) {
-            const int truthIndex = truthVertexIndex(it->second.second->getVertex());
+          if (const auto& mc = truthParticle(track)) {
+            const int truthIndex = truthVertexIndex(mc->getVertex());
             weightPerTruthVertex[truthIndex] += weight;
             ++nTruthLinkedTracks;
             if (truthIndex == 0) {
@@ -293,7 +322,7 @@ struct VertexValidation final
         }
       }
       const double matchFraction = totalWeight > 0. ? majorityWeight / totalWeight : 0.;
-      // Without any truth-linked track there is no truth vertex to match
+      // Without any truth-matched track there is no truth vertex to match
       int classification = matchedTruth < 0 ? Unknown : matchFraction >= m_vertexMatchThreshold ? Clean : Merged;
 
       if (matchedTruth >= 0) {
@@ -568,7 +597,7 @@ private:
     int event = 0;
     int nRecoVtx = 0;
     int nTrueVtx = 0;
-    int nTracksEvent = 0;                           // tracks with a truth link in the event
+    int nTracksEvent = 0;                           // input tracks matched to an MC particle
     int nTracksTruthPV = 0;                         // of them, tracks whose MC particle comes from the truth PV
     float truthPVSumPt2 = 0.f;                      // sum of their MC particles' pT^2 [GeV^2]
     int truthPVFoundClean = 0;                      // truth PV matched by a clean reco vertex
@@ -582,7 +611,7 @@ private:
     std::vector<float> pullX, pullY, pullZ;    // residual / sigma
     std::vector<float> chi2, ndf, chi2ndf;
     std::vector<float> nTracks;            // tracks with weight >= MinTrackWeight
-    std::vector<float> nTruthLinkedTracks; // those of them with a truth link
+    std::vector<float> nTruthLinkedTracks; // those of them matched to an MC particle
     std::vector<float> totalTrackWeight;   // their summed weight
     std::vector<float> sumPt2;             // their sum pT^2 [GeV^2]
     std::vector<float> matchFraction;      // majority truth-vertex weight / total weight
@@ -765,6 +794,9 @@ private:
   Gaudi::Property<double> m_vertexMatchThreshold{this, "VertexMatchThreshold", 0.7,
                                                  "Minimum match fraction for a clean vertex "
                                                  "(ACTS VertexTruthMatcher vertexMatchThreshold)"};
+  Gaudi::Property<bool> m_doubleMatching{this, "DoubleMatching", false,
+                                         "Match a track to its MC particle only if it also holds half of the "
+                                         "particle's hits (ACTS TrackTruthMatcher doubleMatching)"};
 
   // ---------- state ----------
   std::unique_ptr<TFile> m_outFile;
