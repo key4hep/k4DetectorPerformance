@@ -44,12 +44,14 @@
 #include "TTree.h"
 
 // STL
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
 #include <limits>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <utility>
@@ -87,7 +89,9 @@
  *  The quantities follow the ACTS vertexing performance writer
  *  (Examples/Io/Root/src/RootVertexNTupleWriter.cpp, same commit): one tree
  *  entry per event, per-vertex quantities stored as vectors, residual = reco -
- *  truth and pull = residual / sigma_reco.
+ *  matched truth vertex (NaN without a match) and pull = residual / sigma_reco.
+ *  The primary-vertex branches and the headline numbers compare the vertex
+ *  flagged as primary with the truth primary vertex.
  *
  *  Besides finding the truth primary vertex, a producer has to pick it as the
  *  primary one: the PV selection efficiency counts the events where the vertex
@@ -151,6 +155,8 @@ struct VertexValidation final
              const edm4hep::TrackCollection& tracks,
              const std::vector<const edm4hep::TrackerHitSimTrackerHitLinkCollection*>& hitSimLinks,
              const std::vector<const edm4hep::VertexRecoParticleLinkCollection*>& vertexParticleLinks) const override {
+    // The tree buffers and the counters are shared by all events: one event at a time
+    std::scoped_lock lock{m_mutex};
     m_tree.clear();
     m_tree.event = m_evt++;
 
@@ -159,23 +165,20 @@ struct VertexValidation final
     // generator's initial state, or the particles of a particle gun) start the
     // event: see collisionPosition. Vertex smearing in the simulation shifts
     // all of them together, so they share one position; distinct positions
-    // would mean more than one collision in the event.
-    std::vector<edm4hep::Vector3d> truthVertices; // index 0 is the truth primary vertex
+    // mean more than one collision in the event (pile-up or overlay).
+    std::vector<edm4hep::Vector3d> collisions;
     for (const auto& mc : mcParts) {
       if (!mc.getParents().empty()) {
         continue;
       }
       const edm4hep::Vector3d collision = collisionPosition(mc);
-      if (truthVertices.empty()) {
-        truthVertices.push_back(collision);
-      } else if (!samePosition(collision, truthVertices.front())) {
-        // A second primary position means a second collision (pile-up or
-        // overlay). Everything is compared with the first one, so record that
-        // the event is ambiguous rather than mixing silently.
-        m_tree.nTrueVtx = 2;
+      if (std::none_of(collisions.begin(), collisions.end(),
+                       [&](const edm4hep::Vector3d& c) { return samePosition(collision, c); })) {
+        collisions.push_back(collision);
       }
     }
-    if (truthVertices.empty()) {
+    m_tree.nTrueVtx = static_cast<int>(collisions.size());
+    if (collisions.empty()) {
       if (!m_warnedNoTruth) {
         warning() << "No parentless MC particle found; cannot define the truth primary vertex" << endmsg;
         m_warnedNoTruth = true;
@@ -183,9 +186,12 @@ struct VertexValidation final
       m_tree.tree->Fill();
       return;
     }
-    if (m_tree.nTrueVtx == 0) {
-      m_tree.nTrueVtx = 1;
+    // With more than one collision, everything is compared with the first one
+    // (in MC particle order); such events are counted in the summary.
+    if (collisions.size() > 1) {
+      ++m_nEventsMultipleCollisions;
     }
+    std::vector<edm4hep::Vector3d> truthVertices{collisions.front()}; // index 0 is the truth primary vertex
     // A copy: truthVertices grows during the matching below
     const edm4hep::Vector3d truthPV = truthVertices.front();
     m_tree.truthX = truthPV.x;
@@ -264,6 +270,8 @@ struct VertexValidation final
     std::map<int, std::pair<std::size_t, double>> truthToReco;
     // per reco vertex: its tracks whose MC particle comes from the truth PV
     std::vector<int> tracksFromTruthPV;
+    // per reco vertex: residuals x, y, z [um] and pulls w.r.t. the truth PV, for the PV branches
+    std::vector<std::array<float, 6>> toTruthPV;
 
     for (std::size_t i = 0; i < vertices.size(); ++i) {
       const auto vtx = vertices[i];
@@ -273,11 +281,6 @@ struct VertexValidation final
       const float sigX = std::sqrt(cov.getValue(edm4hep::Cartesian::x, edm4hep::Cartesian::x));
       const float sigY = std::sqrt(cov.getValue(edm4hep::Cartesian::y, edm4hep::Cartesian::y));
       const float sigZ = std::sqrt(cov.getValue(edm4hep::Cartesian::z, edm4hep::Cartesian::z));
-
-      // Residuals w.r.t. the truth primary vertex in micrometre, pulls dimensionless
-      const float resX = (pos.x - truthPV.x) * 1000.f;
-      const float resY = (pos.y - truthPV.y) * 1000.f;
-      const float resZ = (pos.z - truthPV.z) * 1000.f;
 
       // --- truth matching, see the class documentation ---
       double totalWeight = 0.;
@@ -342,6 +345,24 @@ struct VertexValidation final
         }
       }
 
+      // Residuals in micrometre, pulls dimensionless: w.r.t. the matched truth
+      // vertex (NaN without a match), as ACTS' RootVertexNTupleWriter, and
+      // w.r.t. the truth PV for the PV branches
+      const auto residuals = [&pos](const edm4hep::Vector3d& truth) {
+        return std::array<float, 3>{static_cast<float>((pos.x - truth.x) * 1000.f),
+                                    static_cast<float>((pos.y - truth.y) * 1000.f),
+                                    static_cast<float>((pos.z - truth.z) * 1000.f)};
+      };
+      std::array<float, 3> res;
+      res.fill(std::numeric_limits<float>::quiet_NaN());
+      if (matchedTruth >= 0) {
+        res = residuals(truthVertices[matchedTruth]);
+      }
+      const auto resPV = residuals(truthPV);
+      toTruthPV.push_back(
+          {resPV[0], resPV[1], resPV[2], pull(resPV[0], sigX), pull(resPV[1], sigY), pull(resPV[2], sigZ)});
+      const float resX = res[0], resY = res[1], resZ = res[2];
+
       m_tree.recoX.push_back(pos.x);
       m_tree.recoY.push_back(pos.y);
       m_tree.recoZ.push_back(pos.z);
@@ -394,12 +415,13 @@ struct VertexValidation final
     // The primary-vertex branches hold zero or one entry per event, so events
     // without a reconstructed primary vertex simply do not contribute.
     if (pvIndex >= 0) {
-      m_tree.pvResX.push_back(m_tree.resX[pvIndex]);
-      m_tree.pvResY.push_back(m_tree.resY[pvIndex]);
-      m_tree.pvResZ.push_back(m_tree.resZ[pvIndex]);
-      m_tree.pvPullX.push_back(m_tree.pullX[pvIndex]);
-      m_tree.pvPullY.push_back(m_tree.pullY[pvIndex]);
-      m_tree.pvPullZ.push_back(m_tree.pullZ[pvIndex]);
+      const auto& pv = toTruthPV[pvIndex];
+      m_tree.pvResX.push_back(pv[0]);
+      m_tree.pvResY.push_back(pv[1]);
+      m_tree.pvResZ.push_back(pv[2]);
+      m_tree.pvPullX.push_back(pv[3]);
+      m_tree.pvPullY.push_back(pv[4]);
+      m_tree.pvPullZ.push_back(pv[5]);
       m_tree.pvChi2Ndf.push_back(m_tree.chi2ndf[pvIndex]);
       m_tree.pvSigmaX.push_back(m_tree.sigmaX[pvIndex]);
       m_tree.pvSigmaY.push_back(m_tree.sigmaY[pvIndex]);
@@ -414,9 +436,13 @@ struct VertexValidation final
       if (m_tree.nTracksTruthPV > 0) {
         m_tree.pvTrackFraction.push_back(tracksFromTruthPV[pvIndex] / static_cast<float>(m_tree.nTracksTruthPV));
       }
-      m_pvResiduals[0].push_back(m_tree.resX[pvIndex]);
-      m_pvResiduals[1].push_back(m_tree.resY[pvIndex]);
-      m_pvResiduals[2].push_back(m_tree.resZ[pvIndex]);
+      for (std::size_t k = 0; k < 3; ++k) {
+        m_pvResiduals[k].push_back(pv[k]);
+        // Only the events where the flagged PV is the clean match of the truth PV
+        if (m_tree.recoPVIsTruthPV == 1) {
+          m_pvResidualsCorrectPV[k].push_back(pv[k]);
+        }
+      }
       ++m_nEventsWithRecoPV;
     }
 
@@ -435,6 +461,10 @@ struct VertexValidation final
       warning() << m_nPVBadCovariance << " primary vertices have a covariance that is not positive definite; "
                 << "their pulls are meaningless" << endmsg;
     }
+    if (m_nEventsMultipleCollisions > 0) {
+      warning() << m_nEventsMultipleCollisions << " events have more than one collision; their reconstructed "
+                << "vertices are compared with the first one" << endmsg;
+    }
 
     if (!m_outFile) {
       return StatusCode::SUCCESS;
@@ -444,6 +474,7 @@ struct VertexValidation final
 
     // Headline numbers, collected below and written as a one-entry tree
     std::array<float, 3> sigmaEff{}, sigmaEffErr{}, residualCentre{}, pullMean{}, pullWidth{};
+    std::array<float, 3> sigmaEffCorrectPV{}, sigmaEffErrCorrectPV{};
 
     // ---------- residuals of the primary vertex ----------
     const std::array<const char*, 3> axes{"X", "Y", "Z"};
@@ -469,6 +500,16 @@ struct VertexValidation final
       sigmaEff[k] = static_cast<float>(eff.sigmaEff);
       sigmaEffErr[k] = static_cast<float>(effErr);
       residualCentre[k] = static_cast<float>(eff.center);
+
+      // The same for the events where the flagged PV is the clean match of the
+      // truth PV: without wrongly selected PVs, and without PVs merged with
+      // tracks from other vertices
+      const auto effCorrect = TrackingValidationPlots::computeEffectiveSigma(m_pvResidualsCorrectPV[k]);
+      sigmaEffCorrectPV[k] = static_cast<float>(effCorrect.sigmaEff);
+      sigmaEffErrCorrectPV[k] =
+          static_cast<float>(TrackingValidationPlots::computeEffectiveSigmaBootstrapError(m_pvResidualsCorrectPV[k]));
+      info() << "PV residual " << axis << ", correctly selected PVs only: sigma_eff = " << sigmaEffCorrectPV[k]
+             << " +- " << sigmaEffErrCorrectPV[k] << " um (" << effCorrect.nEntries << " events)" << endmsg;
 
       auto* c = new TCanvas(("c_pv_res_" + std::string(axis)).c_str(), "", 900, 700);
       c->SetGrid();
@@ -547,13 +588,14 @@ struct VertexValidation final
     // recomputing them. Residuals in um; the PV efficiency is the fraction of
     // events whose truth PV is matched by a clean reconstructed vertex, the PV
     // selection efficiency the fraction where that vertex is also the one
-    // flagged as primary.
+    // flagged as primary. sigmaEff* covers every event with a reconstructed
+    // PV, sigmaEff*CorrectPV only those counted in the PV selection efficiency.
     auto* summary = new TTree("summary", "Headline numbers of the vertex validation");
     int nEvents = m_evt, nRecoPV = m_nEventsWithRecoPV, nTruthPVClean = m_nEventsTruthPVClean;
     int nRecoPVIsTruthPV = m_nEventsRecoPVIsTruthPV;
     int nClean = m_classificationCounts[Clean], nMerged = m_classificationCounts[Merged];
     int nSplit = m_classificationCounts[Split], nUnknown = m_classificationCounts[Unknown];
-    int nPVBadCov = m_nPVBadCovariance;
+    int nPVBadCov = m_nPVBadCovariance, nMultipleCollisions = m_nEventsMultipleCollisions;
     float pvEfficiency = nEvents > 0 ? static_cast<float>(nTruthPVClean) / nEvents : 0.f;
     float pvSelectionEfficiency = nEvents > 0 ? static_cast<float>(nRecoPVIsTruthPV) / nEvents : 0.f;
     summary->Branch("nEvents", &nEvents);
@@ -567,10 +609,13 @@ struct VertexValidation final
     summary->Branch("nSplit", &nSplit);
     summary->Branch("nUnknown", &nUnknown);
     summary->Branch("nPVNotPositiveDefinite", &nPVBadCov);
+    summary->Branch("nEventsMultipleCollisions", &nMultipleCollisions);
     for (std::size_t k = 0; k < axes.size(); ++k) {
       const std::string axis = axes[k];
       summary->Branch(("sigmaEff" + axis).c_str(), &sigmaEff[k]);
       summary->Branch(("sigmaEffErr" + axis).c_str(), &sigmaEffErr[k]);
+      summary->Branch(("sigmaEff" + axis + "CorrectPV").c_str(), &sigmaEffCorrectPV[k]);
+      summary->Branch(("sigmaEffErr" + axis + "CorrectPV").c_str(), &sigmaEffErrCorrectPV[k]);
       summary->Branch(("residualCentre" + axis).c_str(), &residualCentre[k]);
       summary->Branch(("pullMean" + axis).c_str(), &pullMean[k]);
       summary->Branch(("pullWidth" + axis).c_str(), &pullWidth[k]);
@@ -596,7 +641,7 @@ private:
 
     int event = 0;
     int nRecoVtx = 0;
-    int nTrueVtx = 0;
+    int nTrueVtx = 0;                               // distinct collision positions
     int nTracksEvent = 0;                           // input tracks matched to an MC particle
     int nTracksTruthPV = 0;                         // of them, tracks whose MC particle comes from the truth PV
     float truthPVSumPt2 = 0.f;                      // sum of their MC particles' pT^2 [GeV^2]
@@ -607,7 +652,7 @@ private:
     // one entry per reconstructed vertex
     std::vector<float> recoX, recoY, recoZ;    // [mm]
     std::vector<float> sigmaX, sigmaY, sigmaZ; // [um]
-    std::vector<float> resX, resY, resZ;       // reco - truth PV [um]
+    std::vector<float> resX, resY, resZ;       // reco - matched truth vertex [um], NaN without a match
     std::vector<float> pullX, pullY, pullZ;    // residual / sigma
     std::vector<float> chi2, ndf, chi2ndf;
     std::vector<float> nTracks;            // tracks with weight >= MinTrackWeight
@@ -621,7 +666,7 @@ private:
     std::vector<float> covPosDef;          // 1 if the position covariance is positive definite
 
     // zero or one entry: the reconstructed primary vertex
-    std::vector<float> pvResX, pvResY, pvResZ; // [um]
+    std::vector<float> pvResX, pvResY, pvResZ; // reco - truth PV [um]
     std::vector<float> pvPullX, pvPullY, pvPullZ;
     std::vector<float> pvSigmaX, pvSigmaY, pvSigmaZ; // [um]
     std::vector<float> pvChi2Ndf;
@@ -807,9 +852,13 @@ private:
   mutable int m_nEventsRecoPVIsTruthPV = 0;
   mutable int m_nPVBadCovariance = 0;
   mutable std::array<int, 4> m_classificationCounts{};
+  mutable int m_nEventsMultipleCollisions = 0;
   mutable bool m_warnedNoTruth = false;
   /// PV residuals x, y, z [um] over all events, for the effective sigma
   mutable std::array<std::vector<double>, 3> m_pvResiduals;
+  /// The same for the events where the flagged PV is the clean match of the truth PV
+  mutable std::array<std::vector<double>, 3> m_pvResidualsCorrectPV;
+  mutable std::mutex m_mutex;
 };
 
 DECLARE_COMPONENT(VertexValidation)

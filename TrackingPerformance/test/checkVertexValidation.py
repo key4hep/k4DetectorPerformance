@@ -47,6 +47,8 @@ EXPECTED = {
             "matchFraction": [4 / 4.5, 1, 0],
             "nTracks": [5, 2, 1],
             "sumPt2": [17, 2, 1],
+            # w.r.t. the matched truth vertex: vertex 1 to the secondary one
+            "resX": [2, 1, math.nan],
             "pvResX": [2],
             "pvResY": [0],
             "pvResZ": [3],
@@ -110,6 +112,7 @@ EXPECTED_SUMMARY = {
         "nMerged": 1,
         "nSplit": 2,
         "nUnknown": 1,
+        "nEventsMultipleCollisions": 0,
     },
     "unweighted": {
         "nEvents": 3,
@@ -130,6 +133,8 @@ TOLERANCE = 1e-3
 def same(value, expected):
     if isinstance(expected, str):
         return value == expected
+    if math.isnan(expected):
+        return math.isnan(value)
     return math.isclose(value, expected, rel_tol=TOLERANCE, abs_tol=TOLERANCE)
 
 
