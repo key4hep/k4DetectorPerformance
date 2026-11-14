@@ -19,18 +19,22 @@
 
 # Validate a vertex collection against the Monte Carlo truth primary vertex.
 #
-# Works on any EDM4hep file holding MCParticles and an edm4hep::Vertex
-# collection, independent of which algorithm produced the vertices, e.g.
+# Works on any EDM4hep file holding MCParticles, an edm4hep::Vertex collection,
+# the tracks it was made from and their tracker hit -> sim hit links,
+# independent of which algorithm produced the vertices or the tracks, e.g.
 #
 #   ACTS vertexing (k4ActsTracking VertexFindingAlg):
 #     k4run runVertexValidation.py --inputFile sample_VTX.edm4hep.root \
 #         --vertices ACTSPrimaryVertices \
 #         --vertexParticleLinks ACTSPrimaryVertices_ParticleLinks \
+#         --tracks <tracks> --hitSimLinks <hit link collections> \
 #         --validationFile acts_vertices.root
 #
-#   LCFIPlus, from a full CLD reconstruction:
+#   LCFIPlus:
 #     k4run runVertexValidation.py --inputFile sample_REC.edm4hep.root \
-#         --vertices PrimaryVertices --validationFile lcfiplus_vertices.root
+#         --vertices PrimaryVertices \
+#         --tracks <tracks> --hitSimLinks <hit link collections> \
+#         --validationFile lcfiplus_vertices.root
 
 from Gaudi.Configuration import INFO
 from Configurables import EventDataSvc, VertexValidation
@@ -53,9 +57,15 @@ parser.add_argument(
     help="Name of the MC particle collection",
 )
 parser.add_argument(
-    "--trackMCLinks",
-    default="SiTracksMCTruthLink",
-    help="Name of the track -> MC particle link collection used for truth matching",
+    "--tracks",
+    required=True,
+    help="Name of the track collection the vertices were made from",
+)
+parser.add_argument(
+    "--hitSimLinks",
+    nargs="+",
+    required=True,
+    help="Names of the tracker hit -> sim hit link collections used to match tracks to MC particles",
 )
 parser.add_argument(
     "--vertexParticleLinks",
@@ -77,7 +87,8 @@ validation = VertexValidation(
     "VertexValidation",
     MCParticles=[args.mcParticles],
     Vertices=[args.vertices],
-    TrackMCLinks=[args.trackMCLinks],
+    Tracks=[args.tracks],
+    HitSimLinks=args.hitSimLinks,
     VertexParticleLinks=[args.vertexParticleLinks] if args.vertexParticleLinks else [],
     OutputFile=args.validationFile,
 )
