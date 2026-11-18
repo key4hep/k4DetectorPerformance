@@ -67,6 +67,7 @@ gaudi_add_module(${PackageName}
   LINK
     Gaudi::GaudiKernel
     EDM4HEP::edm4hep
+    EDM4HEP::utils
     k4FWCore::k4FWCore
     ROOT::MathCore
     ROOT::MathMore
