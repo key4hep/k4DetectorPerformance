@@ -22,23 +22,6 @@ set(PackageName TrackingPerformance)
 project(${PackageName} LANGUAGES CXX)
 
 # ---------------------------------------------------------------------------
-# External test data
-# ---------------------------------------------------------------------------
-#
-#   https://key4hep.web.cern.ch/testFiles/k4DetectorPerformance/<hash>
-#
-# The test accesses it through:
-#   DATA{.../MuGuns_CLD_o3_v01_2026_07_01.root}
-# ---------------------------------------------------------------------------
-
-include(ExternalData)
-
-list(APPEND ExternalData_URL_TEMPLATES
-  "https://key4hep.web.cern.ch:443/testFiles/k4DetectorPerformance/%(hash)"
-  "https://key4hep.web.cern.ch:443/testFiles/k4DetectorPerformance/MuGuns_CLD_o3_v01_2026_07_01.root"
-)
-
-# ---------------------------------------------------------------------------
 # Sources and headers
 # ---------------------------------------------------------------------------
 
@@ -128,22 +111,30 @@ install(TARGETS ${PackageName}
 
 install(FILES ${test_scripts} DESTINATION test)
 
-set(test_name "testTrackingValidation")
+if(BUILD_TESTING)
+  include(ExternalData)
+  list(APPEND ExternalData_URL_TEMPLATES
+    "https://key4hep.web.cern.ch:443/testFiles/k4DetectorPerformance/%(hash)"
+    "https://key4hep.web.cern.ch:443/testFiles/k4DetectorPerformance/MuGuns_CLD_o3_v01_2026_07_01.root"
+  )
 
-ExternalData_Add_Test(
-  k4DetectorPerformanceData
-  NAME ${test_name}
-  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/testTrackingValidation.sh
-          DATA{${CMAKE_CURRENT_SOURCE_DIR}/test/MuGuns_CLD_o3_v01_2026_07_01.root}
-)
+  set(test_name "testTrackingValidation")
 
-set_test_env(${test_name})
+  ExternalData_Add_Test(
+    k4DetectorPerformanceData
+    NAME ${test_name}
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/testTrackingValidation.sh
+            DATA{${CMAKE_CURRENT_SOURCE_DIR}/test/MuGuns_CLD_o3_v01_2026_07_01.root}
+  )
 
-set_tests_properties(
-  ${test_name}
-  PROPERTIES
-    TIMEOUT 300
-    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
-)
+  set_test_env(${test_name})
 
-ExternalData_Add_Target(k4DetectorPerformanceData)
+  set_tests_properties(
+    ${test_name}
+    PROPERTIES
+      TIMEOUT 300
+      WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+  )
+
+  ExternalData_Add_Target(k4DetectorPerformanceData)
+endif()
