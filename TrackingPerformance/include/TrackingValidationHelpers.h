@@ -24,8 +24,8 @@
 #include "edm4hep/MCParticleCollection.h"
 #include "edm4hep/Track.h"
 #include "edm4hep/TrackState.h"
+#include "edm4hep/TrackerHit.h"
 #include "edm4hep/TrackerHitSimTrackerHitLinkCollection.h"
-#include "podio/ObjectID.h"
 #include <optional>
 #include <unordered_map>
 #include <vector>
@@ -38,10 +38,14 @@ inline constexpr double doubleMatchingRatio = 0.5;
 
 /// Truth of the reconstructed tracker hits. A particle is the position of its
 /// MC particle in the MC particle collection; particles outside that
-/// collection get the following numbers.
+/// collection get the following numbers. Hits and particles are identified by
+/// their handles, which compare and hash by the underlying object, and not by
+/// their ObjectID: the collections created in the same job (e.g. by the
+/// digitizers) do not have a collection ID until they are written, so hits with
+/// the same index in different collections would have the same ObjectID.
 struct HitTruth {
-  std::unordered_map<podio::ObjectID, std::vector<int>> hitToParticle;   // all particles of a hit
-  std::unordered_map<int, std::vector<podio::ObjectID>> hitsPerParticle; // all hits of a particle
+  std::unordered_map<edm4hep::TrackerHit, std::vector<int>> hitToParticle;   // all particles of a hit
+  std::unordered_map<int, std::vector<edm4hep::TrackerHit>> hitsPerParticle; // all hits of a particle
 };
 
 /// Build the hit truth from the digi-to-sim link collections
@@ -57,8 +61,8 @@ HitTruth buildHitTruth(const edm4hep::MCParticleCollection& mcParts,
  * purity >= purityThreshold.
  */
 int majorityParticleForTrack(const edm4hep::Track& trk,
-                             const std::unordered_map<podio::ObjectID, std::vector<int>>& hitToParticle,
-                             const std::unordered_map<int, std::vector<podio::ObjectID>>& hitsPerParticle,
+                             const std::unordered_map<edm4hep::TrackerHit, std::vector<int>>& hitToParticle,
+                             const std::unordered_map<int, std::vector<edm4hep::TrackerHit>>& hitsPerParticle,
                              bool doubleMatching, double purityThreshold);
 
 /// EDM4hep helix parameters; geometry is evaluated in double precision
