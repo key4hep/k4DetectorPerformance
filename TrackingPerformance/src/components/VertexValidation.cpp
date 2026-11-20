@@ -47,7 +47,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <cstdint>
 #include <limits>
 #include <map>
 #include <memory>
@@ -214,10 +213,12 @@ struct VertexValidation final
     // From the hits, as ACTS' TrackTruthMatcher (see the class documentation).
     // A track is matched when first needed, so the tracks of a vertex need not
     // be in the input track collection.
+    // Tracks, vertices and particles are identified by their handles, not by their ObjectIDs, as the hits in
+    // TrackingValidationHelpers::HitTruth.
     const auto hitTruth = TrackingValidationHelpers::buildHitTruth(mcParts, hitSimLinks);
-    std::map<ObjectKey, std::optional<edm4hep::MCParticle>> trackTruth;
+    std::map<edm4hep::Track, std::optional<edm4hep::MCParticle>> trackTruth;
     auto truthParticle = [&](const edm4hep::Track& track) -> const std::optional<edm4hep::MCParticle>& {
-      const auto [it, inserted] = trackTruth.try_emplace(key(track));
+      const auto [it, inserted] = trackTruth.try_emplace(track);
       if (inserted) {
         const int pid = TrackingValidationHelpers::majorityParticleForTrack(
             track, hitTruth.hitToParticle, hitTruth.hitsPerParticle, m_doubleMatching,
@@ -250,10 +251,10 @@ struct VertexValidation final
     m_tree.truthPVSumPt2 = static_cast<float>(truthPVSumPt2);
 
     // ---------- track weights in the vertex fit ----------
-    std::map<std::pair<ObjectKey, ObjectKey>, float> trackWeights;
+    std::map<std::pair<edm4hep::Vertex, edm4hep::ReconstructedParticle>, float> trackWeights;
     for (const auto* links : vertexParticleLinks) {
       for (const auto& link : *links) {
-        trackWeights[{key(link.getFrom()), key(link.getTo())}] = link.getWeight();
+        trackWeights[{link.getFrom(), link.getTo()}] = link.getWeight();
       }
     }
     const bool haveTrackWeights = !vertexParticleLinks.empty();
@@ -292,7 +293,7 @@ struct VertexValidation final
       for (const auto& particle : vtx.getParticles()) {
         float weight = 1.f;
         if (haveTrackWeights) {
-          const auto it = trackWeights.find({key(vtx), key(particle)});
+          const auto it = trackWeights.find({vtx, particle});
           weight = it != trackWeights.end() ? it->second : 0.f;
         }
         if (weight < m_minTrackWeight) {
@@ -628,14 +629,6 @@ struct VertexValidation final
   }
 
 private:
-  using ObjectKey = std::pair<std::uint32_t, int>;
-
-  template <typename T>
-  static ObjectKey key(const T& obj) {
-    const auto id = obj.getObjectID();
-    return {id.collectionID, id.index};
-  }
-
   struct VertexTree {
     TTree* tree = nullptr;
 
