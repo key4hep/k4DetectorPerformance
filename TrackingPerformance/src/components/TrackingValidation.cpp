@@ -168,48 +168,9 @@ struct TrackingValidation final
     }
 
     // ---------- Build truth maps: hit -> particle, particle -> hits ----------
-    // Hits and particles are identified by their handles, which compare and hash by the underlying object, and not
-    // by their ObjectID: the collections created in the same job (e.g. by the digitizers) do not have a collection
-    // ID until they are written, so hits with the same index in different collections would have the same ObjectID.
-    std::unordered_map<int, std::vector<edm4hep::TrackerHit>> hitsPerParticle;
-    hitsPerParticle.reserve(mcParts.size());
-
-    std::unordered_map<edm4hep::TrackerHit, std::vector<int>> hitToParticle;
-    hitToParticle.reserve(200000);
-
-    // The local IDs of the particles of mcParts are their positions in it (mcParts may be a selected/subset
-    // collection). Assign distinct local IDs to outside contributors too, so they cannot
-    // alias selected particles or turn a selected minority into the majority.
-    std::unordered_map<edm4hep::MCParticle, int> particleIndices;
-    int nextParticle = 0;
-    for (const auto& mc : mcParts)
-      particleIndices.emplace(mc, nextParticle++);
-
-    // digi-to-sim links
-    for (const auto* links : linkCollections) {
-      if (!links)
-        continue;
-      for (const auto& link : *links) {
-        const auto digi = link.getFrom();
-        const auto sim = link.getTo();
-        if (!digi.isAvailable() || !sim.isAvailable())
-          continue;
-        const auto mc = sim.getParticle();
-        if (!mc.isAvailable())
-          continue;
-
-        const auto [particle, inserted] = particleIndices.emplace(mc, nextParticle);
-        if (inserted)
-          ++nextParticle;
-        const int pid = particle->second;
-        auto& contributors = hitToParticle[digi];
-        // Preserve every contributor, counting each particle once per reco hit.
-        if (std::find(contributors.begin(), contributors.end(), pid) == contributors.end()) {
-          contributors.push_back(pid);
-          hitsPerParticle[pid].push_back(digi);
-        }
-      }
-    }
+    const auto hitTruth = TrackingValidationHelpers::buildHitTruth(mcParts, linkCollections);
+    const auto& hitsPerParticle = hitTruth.hitsPerParticle;
+    const auto& hitToParticle = hitTruth.hitToParticle;
 
     // ---------- Finder & Perfect association trees ----------
     if ((mode == 0 || mode == 1) && finderTracks) {
@@ -799,35 +760,9 @@ private:
   int majorityParticleForTrack(const edm4hep::Track& trk,
                                const std::unordered_map<edm4hep::TrackerHit, std::vector<int>>& hitToParticle,
                                const std::unordered_map<int, std::vector<edm4hep::TrackerHit>>& hitsPerParticle) const {
-    std::unordered_map<int, int> counts;
-    for (const auto& h : trk.getTrackerHits()) {
-      auto it = hitToParticle.find(h);
-      if (it == hitToParticle.end())
-        continue;
-      for (int pid : it->second)
-        counts[pid] += 1;
-    }
-    if (counts.empty())
-      return -1;
-
-    int bestP = -1;
-    int bestN = -1;
-    for (const auto& kv : counts) {
-      if (kv.second > bestN || (kv.second == bestN && kv.first < bestP)) {
-        bestN = kv.second;
-        bestP = kv.first;
-      }
-    }
-    const double purity = double(bestN) / trk.getTrackerHits().size();
-    const auto truthHits = hitsPerParticle.find(bestP);
-    if (truthHits == hitsPerParticle.end() || truthHits->second.empty())
-      return -1;
-    const double completeness = double(bestN) / truthHits->second.size();
-    using TrackingValidationHelpers::doubleMatchingRatio;
-    const bool matched = m_finderEfficiencyDefinition.value() == 2
-                             ? purity >= doubleMatchingRatio && completeness >= doubleMatchingRatio
-                             : purity >= m_finderPurityThreshold.value();
-    return matched ? bestP : -1;
+    return TrackingValidationHelpers::majorityParticleForTrack(trk, hitToParticle, hitsPerParticle,
+                                                               m_finderEfficiencyDefinition.value() == 2,
+                                                               m_finderPurityThreshold.value());
   }
 
   /**
