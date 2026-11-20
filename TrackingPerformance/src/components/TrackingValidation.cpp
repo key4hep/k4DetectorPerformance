@@ -19,7 +19,6 @@
 
 #include "TrackingValidationHelpers.h"
 #include "TrackingValidationPlots.h"
-#include "podio/ObjectID.h"
 
 // k4FWCore
 #include "k4FWCore/Consumer.h"
@@ -32,6 +31,7 @@
 #include "edm4hep/MCParticleCollection.h"
 #include "edm4hep/TrackCollection.h"
 #include "edm4hep/TrackState.h"
+#include "edm4hep/TrackerHit.h"
 #include "edm4hep/TrackerHitSimTrackerHitLinkCollection.h"
 
 // ROOT
@@ -168,19 +168,22 @@ struct TrackingValidation final
     }
 
     // ---------- Build truth maps: hit -> particle, particle -> hits ----------
-    std::unordered_map<int, std::vector<podio::ObjectID>> hitsPerParticle;
+    // Hits and particles are identified by their handles, which compare and hash by the underlying object, and not
+    // by their ObjectID: the collections created in the same job (e.g. by the digitizers) do not have a collection
+    // ID until they are written, so hits with the same index in different collections would have the same ObjectID.
+    std::unordered_map<int, std::vector<edm4hep::TrackerHit>> hitsPerParticle;
     hitsPerParticle.reserve(mcParts.size());
 
-    std::unordered_map<podio::ObjectID, std::vector<int>> hitToParticle;
+    std::unordered_map<edm4hep::TrackerHit, std::vector<int>> hitToParticle;
     hitToParticle.reserve(200000);
 
-    // ObjectID indices need not be positions in a selected/subset MC collection.
-    // Assign distinct local IDs to outside contributors too, so they cannot
+    // The local IDs of the particles of mcParts are their positions in it (mcParts may be a selected/subset
+    // collection). Assign distinct local IDs to outside contributors too, so they cannot
     // alias selected particles or turn a selected minority into the majority.
-    std::unordered_map<podio::ObjectID, int> particleIndices;
+    std::unordered_map<edm4hep::MCParticle, int> particleIndices;
     int nextParticle = 0;
     for (const auto& mc : mcParts)
-      particleIndices.emplace(mc.getObjectID(), nextParticle++);
+      particleIndices.emplace(mc, nextParticle++);
 
     // digi-to-sim links
     for (const auto* links : linkCollections) {
@@ -195,16 +198,15 @@ struct TrackingValidation final
         if (!mc.isAvailable())
           continue;
 
-        const auto [particle, inserted] = particleIndices.emplace(mc.getObjectID(), nextParticle);
+        const auto [particle, inserted] = particleIndices.emplace(mc, nextParticle);
         if (inserted)
           ++nextParticle;
         const int pid = particle->second;
-        const auto key = digi.getObjectID();
-        auto& contributors = hitToParticle[key];
+        auto& contributors = hitToParticle[digi];
         // Preserve every contributor, counting each particle once per reco hit.
         if (std::find(contributors.begin(), contributors.end(), pid) == contributors.end()) {
           contributors.push_back(pid);
-          hitsPerParticle[pid].push_back(key);
+          hitsPerParticle[pid].push_back(digi);
         }
       }
     }
@@ -576,7 +578,7 @@ private:
 
   // ---------- association trees ----------
   void fillPerfectAssoc(int event, const edm4hep::MCParticleCollection& mcParts,
-                        const std::unordered_map<int, std::vector<podio::ObjectID>>& hitsPerParticle) const {
+                        const std::unordered_map<int, std::vector<edm4hep::TrackerHit>>& hitsPerParticle) const {
 
     m_perf_p2t.clear();
     m_perf_t2p.clear();
@@ -644,8 +646,8 @@ private:
 
   void fillFinderAssoc(int event, const edm4hep::MCParticleCollection& mcParts,
                        const edm4hep::TrackCollection& finderTracks,
-                       const std::unordered_map<podio::ObjectID, std::vector<int>>& hitToParticle,
-                       const std::unordered_map<int, std::vector<podio::ObjectID>>& hitsPerParticle) const {
+                       const std::unordered_map<edm4hep::TrackerHit, std::vector<int>>& hitToParticle,
+                       const std::unordered_map<int, std::vector<edm4hep::TrackerHit>>& hitsPerParticle) const {
 
     m_finder_p2t.clear();
     m_finder_t2p.clear();
@@ -661,8 +663,7 @@ private:
     for (const auto& trk : finderTracks) {
       trackNHits[tIdx] = (int)trk.getTrackerHits().size();
       for (const auto& h : trk.getTrackerHits()) {
-        const auto hk = h.getObjectID();
-        auto it = hitToParticle.find(hk);
+        auto it = hitToParticle.find(h);
         if (it == hitToParticle.end())
           continue;
         for (int pid : it->second)
@@ -796,12 +797,11 @@ private:
 
   // ---------- matching helper ----------
   int majorityParticleForTrack(const edm4hep::Track& trk,
-                               const std::unordered_map<podio::ObjectID, std::vector<int>>& hitToParticle,
-                               const std::unordered_map<int, std::vector<podio::ObjectID>>& hitsPerParticle) const {
+                               const std::unordered_map<edm4hep::TrackerHit, std::vector<int>>& hitToParticle,
+                               const std::unordered_map<int, std::vector<edm4hep::TrackerHit>>& hitsPerParticle) const {
     std::unordered_map<int, int> counts;
     for (const auto& h : trk.getTrackerHits()) {
-      const auto hk = h.getObjectID();
-      auto it = hitToParticle.find(hk);
+      auto it = hitToParticle.find(h);
       if (it == hitToParticle.end())
         continue;
       for (int pid : it->second)
@@ -857,8 +857,8 @@ private:
   template <typename PerfectMapT>
   void fillFitterTrees(int event, const edm4hep::MCParticleCollection& mcParts,
                        const edm4hep::TrackCollection& fittedTracks,
-                       const std::unordered_map<podio::ObjectID, std::vector<int>>& hitToParticle,
-                       const std::unordered_map<int, std::vector<podio::ObjectID>>& hitsPerParticle,
+                       const std::unordered_map<edm4hep::TrackerHit, std::vector<int>>& hitToParticle,
+                       const std::unordered_map<int, std::vector<edm4hep::TrackerHit>>& hitsPerParticle,
                        const PerfectMapT& perfectAtIPByPid, bool doPerfect) const {
 
     m_fit_vs_mc.clear();
