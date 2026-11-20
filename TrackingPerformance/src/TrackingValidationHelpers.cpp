@@ -19,13 +19,25 @@
 
 #include "TrackingValidationHelpers.h"
 
+#include <edm4hep/Constants.h>
+#include <edm4hep/utils/Helix.h>
+
 #include <cmath>
 #include <limits>
+#include <stdexcept>
 
 namespace TrackingValidationHelpers {
 namespace {
-  constexpr double momentumScale = 0.000299792458; // GeV / (T mm)
   constexpr double nan = std::numeric_limits<double>::quiet_NaN();
+
+  std::optional<edm4hep::utils::Helix> makeHelix(const edm4hep::Vector3d& position, const edm4hep::Vector3d& momentum,
+                                                 double charge, double Bz, const edm4hep::Vector3d& reference) {
+    try {
+      return edm4hep::utils::Helix(position, momentum, charge, Bz, reference);
+    } catch (const std::invalid_argument&) {
+      return std::nullopt;
+    }
+  }
 } // namespace
 
 double wrapDeltaPhi(double a, double b) {
@@ -36,60 +48,33 @@ double wrapDeltaPhi(double a, double b) {
 
 PCAInfoHelper PCAInfo_mm(double x, double y, double z, double px, double py, double pz, double charge, double refX,
                          double refY, double Bz) {
-  PCAInfoHelper out;
-  const double pt = std::hypot(px, py);
-  if (!(pt > 0.) || !std::isfinite(pt) || !std::isfinite(charge) || !std::isfinite(Bz))
-    return out;
-  const double dx = x - refX;
-  const double dy = y - refY;
-  const double sinPhi = py / pt;
-  const double cosPhi = px / pt;
-  // Signed curvature, > 0 for a particle turning clockwise (q Bz > 0)
-  const double rho = momentumScale * charge * Bz / pt;
-  double pathT; // transverse path length from the production point to the PCA
-  if (rho == 0.) {
-    // Neutral particle or no field: straight line
-    pathT = -(dx * cosPhi + dy * sinPhi);
-    out.pcaX = x + pathT * cosPhi;
-    out.pcaY = y + pathT * sinPhi;
-    out.phi0 = std::atan2(py, px);
-  } else {
-    // The PCA lies on the line from the reference point to the circle centre (xc, yc),
-    // at distance dist - radius from the reference point.
-    const double xc = dx + sinPhi / rho;
-    const double yc = dy - cosPhi / rho;
-    const double dist = std::hypot(xc, yc);
-    // dist - radius without subtracting two numbers of the size of the radius
-    const double distMinusRadius =
-        (dx * dx + dy * dy + 2. * (dx * sinPhi - dy * cosPhi) / rho) / (dist + 1. / std::abs(rho));
-    out.pcaX = refX + xc * distMinusRadius / dist;
-    out.pcaY = refY + yc * distMinusRadius / dist;
-    const double turn = rho > 0. ? 1. : -1.;
-    out.phi0 = std::atan2(turn * xc, -turn * yc);
-    pathT = std::remainder(std::atan2(py, px) - out.phi0, 2. * M_PI) / rho;
+  const auto helix = makeHelix({x, y, z}, {px, py, pz}, charge, Bz, {refX, refY, 0.});
+  if (!helix) {
+    return {};
   }
-  out.pcaZ = z + pathT * pz / pt;
-  out.ok = std::isfinite(out.pcaX) && std::isfinite(out.pcaY) && std::isfinite(out.pcaZ) && std::isfinite(out.phi0);
-  return out;
+  const double phi0 = helix->getPhi0();
+  const double d0 = helix->getD0();
+  const double pcaX = refX - d0 * std::sin(phi0);
+  const double pcaY = refY + d0 * std::cos(phi0);
+  return {pcaX, pcaY, helix->getZ0(), phi0, std::isfinite(pcaX) && std::isfinite(pcaY)};
 }
 
 HelixParams truthPerigeeFromMC(const edm4hep::MCParticle& mc, double Bz, double refX, double refY, double refZ) {
   const auto& p = mc.getMomentum();
-  const auto& v = mc.getVertex();
   HelixParams hp;
   hp.pT = std::hypot(p.x, p.y);
   hp.p = std::hypot(hp.pT, p.z);
-  const auto pca = PCAInfo_mm(v.x, v.y, v.z, p.x, p.y, p.z, mc.getCharge(), refX, refY, Bz);
-  if (!pca.ok) {
+  const auto helix = makeHelix(mc.getVertex(), p, mc.getCharge(), Bz, {refX, refY, refZ});
+  if (!helix) {
     hp.D0 = hp.Z0 = hp.phi = hp.omega = hp.tanLambda = nan;
     return hp;
   }
-  hp.D0 = -(pca.pcaX - refX) * std::sin(pca.phi0) + (pca.pcaY - refY) * std::cos(pca.phi0);
-  hp.Z0 = pca.pcaZ - refZ;
-  hp.phi = pca.phi0;
-  hp.tanLambda = p.z / hp.pT;
-  // Signed by the charge only, as the fitted state (and ptFromState) use |Bz|.
-  hp.omega = momentumScale * std::abs(Bz) * mc.getCharge() / hp.pT;
+  hp.D0 = helix->getD0();
+  hp.Z0 = helix->getZ0();
+  hp.phi = helix->getPhi0();
+  hp.tanLambda = helix->getTanLambda();
+  // The validation plots use |Bz| for the fitted curvature convention.
+  hp.omega = Bz < 0. ? -helix->getOmega() : helix->getOmega();
   return hp;
 }
 
@@ -106,7 +91,7 @@ double ptFromState(const edm4hep::TrackState& st, double Bz) {
   const double omega = std::abs(st.omega);
   if (!(omega > 0.) || !std::isfinite(omega) || !std::isfinite(Bz) || Bz == 0.)
     return nan;
-  return momentumScale * std::abs(Bz) / omega;
+  return edm4hep::constants::fieldToCurvature * std::abs(Bz) / omega;
 }
 
 double momentumFromState(const edm4hep::TrackState& st, double Bz) {
